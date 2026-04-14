@@ -333,6 +333,44 @@ User asked for session/room isolation so multiple groups can't step on each othe
 
 ---
 
+## NAS deployment (live, 2026-04-14)
+
+The app is deployed on the Synology NAS (`FatMan`, 192.168.1.200) and reachable at **https://grid.thesweetmojo.com**, gated by Cloudflare Access (email-allowlist policy → one-time PIN).
+
+**Layout on the NAS:** `/volume1/docker/dungeon-grid/`
+- `app/` — git checkout of `main`, cloned via containerized git (no git binary on the host; `alpine/git` image is used instead)
+- `data/` — bind-mounted SQLite + WAL; `chmod 700`
+- `uploads/` — bind-mounted uploaded images; `chmod 700`
+- `triggers/` — bind-mounted marker-file directory; the container writes here, host reads
+- `docker-compose.yml` — loopback bind `127.0.0.1:3030:3000`, `read_only: true`, `cap_drop: ALL`, `no-new-privileges`, `user: "1026:100"`, memory capped at 512M. Passes `GIT_SHA` / `GIT_SUBJECT` as build args.
+- `.env` — holds `DM_PASSWORD` only. Never committed. Owner-only.
+- `update.sh` — the host-side updater (see below)
+
+**Cloudflare tunnel:** reuses the existing `cloudflared` container (host-network mode, remotely-managed via Zero Trust dashboard). The public hostname `grid.thesweetmojo.com` routes to `http://localhost:3030`. Ingress rules live in the Cloudflare dashboard, not in a local config file.
+
+**Gotchas specific to this NAS:**
+- Docker's default bridge network can't reach DNS at `192.168.1.1` — `apk` and similar inside a bridge-network container fail. Workaround: `build.network: host` in compose. Host-network containers are fine.
+- `/volume1/docker/` share has ACL inheritance that makes files world-readable at the DSM level ("everyone::allow:r-x"). On a single-user NAS this is near-zero risk, but tracked as a followup.
+
+## Deploy loop (PC → NAS)
+
+Iterate on the PC, push to GitHub, and the NAS picks it up. There are two paths:
+
+**Automatic (polling):** DSM Task Scheduler runs `/volume1/docker/dungeon-grid/update.sh` every minute. The script runs `git fetch origin main` via containerized git; if `origin/main` has advanced, it pulls, rebuilds, and restarts. Polling latency ≤ 1 minute + build time.
+
+**Manual (DM button):** In the DM sidebar there's a **Deployment** section showing the currently-running short SHA and commit subject, plus a **Check for Updates** button. Clicking it writes a `*.req` marker file into `triggers/`; the next tick of `update.sh` sees it and forces a rebuild regardless of whether `origin/main` moved. Useful for "I just pushed, redeploy now."
+
+**Critical constraint:** the container does **not** have access to `/var/run/docker.sock`. Mounting it would undo all the hardening (RCE → NAS root). The trigger-file + host-runner pattern exists specifically to avoid that.
+
+**Fail-closed on broken builds:** if `docker compose build` fails, `update.sh` logs the failure and exits. The old container keeps running. Stale SHA in the DM UI is your signal that something's wrong — check `/volume1/docker/dungeon-grid/triggers/last.log` for the error.
+
+**Logs:**
+- `triggers/last.log` — current tick
+- `triggers/last.log.prev` — previous tick
+- `triggers/update.lock` — flock file; presence means a tick is in progress (ignore it unless one's stuck)
+
+**DSM Task Scheduler task:** `dungeon-grid-updater`, runs as `root`, every minute, executes `/volume1/docker/dungeon-grid/update.sh`.
+
 ## When you resume on the other machine
 
 1. Clone the repo if not already: `git clone git@github.com:jampick/dungeon-grid.git`
