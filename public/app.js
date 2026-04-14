@@ -610,6 +610,25 @@ $('btnZoomIn').onclick = () => { view.scale *= 1.15; draw(); };
 $('btnZoomOut').onclick = () => { view.scale /= 1.15; draw(); };
 $('btnReset').onclick = () => { view = { scale: 1, ox: 20, oy: 20 }; draw(); };
 
+// ---- Undo ----
+function doUndo() {
+  if (auth.role !== 'dm') return;
+  socket.emit('dm:undo');
+}
+$('btnUndo').onclick = doUndo;
+$('btnUndo').addEventListener('mouseenter', () => {
+  const label = state?.undoLabel;
+  $('btnUndo').title = label ? `Undo: ${label}` : 'Nothing to undo (Ctrl+Z)';
+});
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+    const tag = (e.target && e.target.tagName) || '';
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable)) return;
+    e.preventDefault();
+    doUndo();
+  }
+});
+
 // ---- Map settings ----
 $('saveMap').onclick = () => {
   socket.emit('map:update', {
