@@ -10,6 +10,7 @@ import { fileURLToPath } from 'url';
 import { LIGHT_PRESETS, FACING_VEC, computeRevealed, rollDice, recomputeFog as recomputeFogLogic,
   canClearChat, createUndoStack, snapshotToken, restoreTokenRow, snapshotWalls, restoreWalls, snapshotMap, snapshotFog } from './lib/logic.js';
 import { listMaps, createMap as createMapDb, renameMap as renameMapDb, activateMap as activateMapDb, duplicateMap as duplicateMapDb, deleteMap as deleteMapDb } from './lib/maps.js';
+import { getDeploymentInfo, TRIGGER_DIR, buildTriggerFilename } from './lib/deployment.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -197,6 +198,9 @@ app.post('/api/upload', requireAuth, upload.single('file'), (req, res) => {
   res.json({ url: '/uploads/' + newName });
 });
 
+// --- Deployment info (captured once at startup) ---
+const DEPLOYMENT = getDeploymentInfo();
+
 // --- State helpers ---
 function getActiveMap() {
   return db.prepare('SELECT * FROM maps WHERE active=1 ORDER BY id LIMIT 1').get();
@@ -212,7 +216,7 @@ function getState() {
   const players = db.prepare('SELECT id, name, role FROM players WHERE campaign_id=?').all(campaign.id);
   const pendings = [...pendingMoves.entries()].map(([id, v]) => ({ id, ...v }));
   const doorPendings = [...pendingDoors.entries()].map(([key, v]) => ({ key, ...v }));
-  return { campaign, maps, activeMap, tokens, fog: fogRow?.data || null, walls, catalog, players, pendings, doorPendings, undoLabel: undoStack.topLabel() };
+  return { campaign, maps, activeMap, tokens, fog: fogRow?.data || null, walls, catalog, players, pendings, doorPendings, undoLabel: undoStack.topLabel(), deployment: DEPLOYMENT };
 }
 
 app.get('/api/state', (req, res) => {
@@ -596,6 +600,18 @@ io.on('connection', (socket) => {
   socket.on('dice:roll', ({ expr }) => {
     const result = rollDice(expr);
     io.emit('chat:msg', { from: me.name, role: me.role, text: `🎲 ${expr} = **${result.total}** (${result.rolls.join(', ')})`, ts: Date.now() });
+  });
+
+  socket.on('dm:update-request', () => {
+    if (!requireDM(socket)) return;
+    const reply = (text) => socket.emit('chat:msg', { from: 'system', role: 'dm', text, ts: Date.now() });
+    try {
+      const fname = buildTriggerFilename();
+      fs.writeFileSync(path.join(TRIGGER_DIR, fname), `${me.name} @ ${new Date().toISOString()}\n`);
+      reply(`🔄 Update requested (${fname}). The host runner picks this up within ~1 minute; the app will restart if a new commit is found.`);
+    } catch (e) {
+      reply(`⚠️ Update trigger failed: ${e.code || e.message}. Host-side updater may not be configured — check /volume1/docker/dungeon-grid/triggers is bind-mounted.`);
+    }
   });
 
   socket.on('dm:undo', () => {
