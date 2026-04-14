@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
   name TEXT NOT NULL,
   ruleset TEXT DEFAULT '1e',
   approval_mode INTEGER DEFAULT 0,
+  door_approval INTEGER DEFAULT 1,
   show_other_hp INTEGER DEFAULT 0,
   created_at INTEGER
 );
@@ -102,6 +103,7 @@ for (const stmt of [
   "ALTER TABLE tokens ADD COLUMN facing INTEGER DEFAULT 0",
   "ALTER TABLE walls ADD COLUMN kind TEXT DEFAULT 'wall'",
   "ALTER TABLE walls ADD COLUMN open INTEGER DEFAULT 0",
+  "ALTER TABLE campaigns ADD COLUMN door_approval INTEGER DEFAULT 1",
 ]) { try { db.exec(stmt); } catch {} }
 
 // --- 1e light sources ---
@@ -224,6 +226,8 @@ function autoRevealForToken(tokenId) {
 
 // In-memory pending moves (active map only): tokenId -> { fromX, fromY, toX, toY, actor }
 const pendingMoves = new Map();
+// In-memory pending door actions: "cx,cy,side" -> { actor, toOpen }
+const pendingDoors = new Map();
 
 // Seed default campaign
 const campaignCount = db.prepare('SELECT COUNT(*) c FROM campaigns').get().c;
@@ -293,7 +297,8 @@ function getState() {
   const catalog = db.prepare('SELECT * FROM catalog').all();
   const players = db.prepare('SELECT id, name, role FROM players WHERE campaign_id=?').all(campaign.id);
   const pendings = [...pendingMoves.entries()].map(([id, v]) => ({ id, ...v }));
-  return { campaign, maps, activeMap, tokens, fog: fogRow?.data || null, walls, catalog, players, pendings };
+  const doorPendings = [...pendingDoors.entries()].map(([key, v]) => ({ key, ...v }));
+  return { campaign, maps, activeMap, tokens, fog: fogRow?.data || null, walls, catalog, players, pendings, doorPendings };
 }
 
 app.get('/api/state', (req, res) => {
@@ -411,13 +416,14 @@ io.on('connection', (socket) => {
   socket.on('campaign:settings', (data) => {
     if (!requireDM(socket)) return;
     const c = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
-    const fields = ['ruleset','approval_mode','show_other_hp','name'];
+    const fields = ['ruleset','approval_mode','door_approval','show_other_hp','name'];
     const sets = [], vals = [];
     for (const f of fields) if (f in data) { sets.push(`${f}=?`); vals.push(data[f]); }
     if (!sets.length) return;
     vals.push(c.id);
     db.prepare(`UPDATE campaigns SET ${sets.join(',')} WHERE id=?`).run(...vals);
     if ('approval_mode' in data && !data.approval_mode) pendingMoves.clear();
+    if ('door_approval' in data && !data.door_approval) pendingDoors.clear();
     broadcastState();
   });
 
@@ -436,6 +442,39 @@ io.on('connection', (socket) => {
     else db.prepare("INSERT INTO walls (map_id, cx, cy, side, kind, open) VALUES (?,?,?,?,'wall',0)").run(map.id, cx, cy, side);
     io.emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
     recomputeFog(map.id);
+  });
+
+  socket.on('door:request', ({ cx, cy, side }) => {
+    // Player (or DM) wants to open/close a door
+    const map = getActiveMap();
+    const d = db.prepare("SELECT kind, open FROM walls WHERE map_id=? AND cx=? AND cy=? AND side=? AND kind='door'").get(map.id, cx, cy, side);
+    if (!d) return;
+    const campaign = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
+    const toOpen = !d.open;
+    if (me.role !== 'dm' && campaign.door_approval) {
+      pendingDoors.set(`${cx},${cy},${side}`, { actor: me.name, toOpen, cx, cy, side });
+      broadcastState();
+      return;
+    }
+    db.prepare('UPDATE walls SET open=? WHERE map_id=? AND cx=? AND cy=? AND side=?').run(toOpen ? 1 : 0, map.id, cx, cy, side);
+    pendingDoors.delete(`${cx},${cy},${side}`);
+    io.emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
+    recomputeFog(map.id);
+    broadcastState();
+  });
+
+  socket.on('door:resolve', ({ approved, key }) => {
+    if (!requireDM(socket)) return;
+    const p = pendingDoors.get(key);
+    if (!p) return;
+    pendingDoors.delete(key);
+    if (approved) {
+      const map = getActiveMap();
+      db.prepare('UPDATE walls SET open=? WHERE map_id=? AND cx=? AND cy=? AND side=?').run(p.toOpen ? 1 : 0, map.id, p.cx, p.cy, p.side);
+      io.emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
+      recomputeFog(map.id);
+    }
+    broadcastState();
   });
 
   socket.on('door:cycle', ({ cx, cy, side }) => {

@@ -83,6 +83,7 @@ function applyState() {
   $('mapW').value = m.width;
   $('mapH').value = m.height;
   $('approval').checked = !!state.campaign.approval_mode;
+  $('doorApproval').checked = !!state.campaign.door_approval;
   $('showOtherHp').checked = !!state.campaign.show_other_hp;
   $('ruleset').value = state.campaign.ruleset || '1e';
   loadFog(state.fog);
@@ -96,22 +97,33 @@ function applyState() {
 
 function renderPendings() {
   const box = $('approvalBox');
-  if (auth.role !== 'dm' || !state.pendings?.length) {
+  const moves = state.pendings || [];
+  const doors = state.doorPendings || [];
+  if (auth.role !== 'dm' || (!moves.length && !doors.length)) {
     box.classList.add('hidden');
     box.innerHTML = '';
     return;
   }
   box.classList.remove('hidden');
-  box.innerHTML = '<h4>Pending moves</h4>';
-  for (const p of state.pendings) {
+  box.innerHTML = '<h4>Pending actions</h4>';
+  for (const p of moves) {
     const t = state.tokens.find(x => x.id === p.id);
     const name = t?.name || `#${p.id}`;
     const row = document.createElement('div');
     row.className = 'pending';
-    row.innerHTML = `<b>${escapeHtml(p.actor)}</b> → ${escapeHtml(name)} (${p.fromX},${p.fromY}) → (${p.toX},${p.toY})
+    row.innerHTML = `<b>${escapeHtml(p.actor)}</b> move ${escapeHtml(name)} (${p.fromX},${p.fromY}) → (${p.toX},${p.toY})
       <br/><button class="ok">Approve</button> <button class="no">Deny</button>`;
     row.querySelector('.ok').onclick = () => socket.emit('approval:resolve', { approved: true, tokenId: p.id });
     row.querySelector('.no').onclick = () => socket.emit('approval:resolve', { approved: false, tokenId: p.id });
+    box.appendChild(row);
+  }
+  for (const p of doors) {
+    const row = document.createElement('div');
+    row.className = 'pending';
+    row.innerHTML = `<b>${escapeHtml(p.actor)}</b> wants to ${p.toOpen ? 'open' : 'close'} door @ (${p.cx},${p.cy},${p.side})
+      <br/><button class="ok">Approve</button> <button class="no">Deny</button>`;
+    row.querySelector('.ok').onclick = () => socket.emit('door:resolve', { approved: true, key: p.key });
+    row.querySelector('.no').onclick = () => socket.emit('door:resolve', { approved: false, key: p.key });
     box.appendChild(row);
   }
 }
@@ -254,6 +266,7 @@ function draw() {
 
   // walls & doors — visible if either bordering cell is visible (for players)
   ctx.lineCap = 'round';
+  const pendingDoorKeys = new Set((state.doorPendings || []).map(d => d.key));
   for (const [key, info] of walls) {
     const [cx, cy, side] = key.split(',');
     const ix = +cx, iy = +cy;
@@ -300,6 +313,16 @@ function draw() {
         ctx.moveTo(aX, aY); ctx.lineTo(aX + nx * L, aY + ny * L);
         ctx.moveTo(bX, bY); ctx.lineTo(bX + nx * L, bY + ny * L);
         ctx.stroke();
+      }
+      // pending indicator
+      if (pendingDoorKeys.has(key)) {
+        const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+        ctx.fillStyle = 'rgba(122,46,46,0.9)';
+        ctx.beginPath(); ctx.arc(mx, my, size * 0.18, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#f4ecd8';
+        ctx.font = `bold ${Math.floor(size * 0.22)}px Georgia, serif`;
+        ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText('?', mx, my);
       }
     }
   }
@@ -495,6 +518,24 @@ canvas.addEventListener('mousedown', (e) => {
       return;
     }
   }
+  // hit test a door (near nearest edge, within ~1/3 cell)
+  const lx = w.x - cellX * size, ly = w.y - cellY * size;
+  const dN = ly, dS = size - ly, dW = lx, dE = size - lx;
+  const minEdge = Math.min(dN, dS, dW, dE);
+  if (minEdge < size * 0.25) {
+    let ex = cellX, ey = cellY, eside = 'n';
+    if (minEdge === dN) { eside = 'n'; }
+    else if (minEdge === dS) { eside = 'n'; ey = cellY + 1; }
+    else if (minEdge === dW) { eside = 'w'; }
+    else { eside = 'w'; ex = cellX + 1; }
+    const key = `${ex},${ey},${eside}`;
+    const info = walls.get(key);
+    if (info && info.kind === 'door') {
+      // player (or DM without tool mode) click toggles via request
+      socket.emit('door:request', { cx: ex, cy: ey, side: eside });
+      return;
+    }
+  }
   dragging = { mode: 'pan', sx, sy, ox: view.ox, oy: view.oy };
 });
 canvas.addEventListener('mousemove', (e) => {
@@ -588,6 +629,7 @@ $('bgFile').onchange = async () => {
 };
 
 $('approval').onchange = () => socket.emit('campaign:settings', { approval_mode: $('approval').checked ? 1 : 0 });
+$('doorApproval').onchange = () => socket.emit('campaign:settings', { door_approval: $('doorApproval').checked ? 1 : 0 });
 $('showOtherHp').onchange = () => socket.emit('campaign:settings', { show_other_hp: $('showOtherHp').checked ? 1 : 0 });
 $('ruleset').onchange = () => socket.emit('campaign:settings', { ruleset: $('ruleset').value });
 
