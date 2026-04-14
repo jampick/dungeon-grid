@@ -187,7 +187,13 @@ function renderTokenList() {
   for (const t of state.tokens) {
     const row = document.createElement('div');
     row.className = 'tk';
-    row.innerHTML = `<span class="dot" style="background:${t.color}"></span><span>${t.name}</span>`;
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.style.backgroundColor = t.color || '';
+    const name = document.createElement('span');
+    name.textContent = t.name || '';
+    row.appendChild(dot);
+    row.appendChild(name);
     row.onclick = () => openTokenDialog(t.id);
     list.appendChild(row);
   }
