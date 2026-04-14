@@ -169,14 +169,29 @@ app.post('/api/login/player', (req, res) => {
 });
 
 // --- Uploads ---
+const MIME_TO_EXT = {
+  'image/png': '.png',
+  'image/jpeg': '.jpg',
+  'image/webp': '.webp',
+  'image/gif': '.gif',
+};
 const upload = multer({
   dest: path.join(__dirname, 'uploads'),
-  limits: { fileSize: 10 * 1024 * 1024 }
+  limits: { fileSize: 10 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => {
+    if (MIME_TO_EXT[file.mimetype]) return cb(null, true);
+    cb(null, false);
+  },
 });
-app.post('/api/upload', upload.single('file'), (req, res) => {
+function requireAuth(req, res, next) {
   const user = authFromReq(req);
   if (!user) return res.status(401).json({ error: 'unauth' });
-  const ext = path.extname(req.file.originalname) || '.png';
+  req.user = user;
+  next();
+}
+app.post('/api/upload', requireAuth, upload.single('file'), (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'image required (png/jpeg/webp/gif)' });
+  const ext = MIME_TO_EXT[req.file.mimetype];
   const newName = req.file.filename + ext;
   fs.renameSync(req.file.path, path.join(__dirname, 'uploads', newName));
   res.json({ url: '/uploads/' + newName });
