@@ -413,7 +413,7 @@ io.on('connection', (socket) => {
       }
     });
     tx();
-    io.emit('walls:state', db.prepare('SELECT cx, cy, side FROM walls WHERE map_id=?').all(map.id));
+    io.emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
     recomputeFog(map.id);
   });
 
