@@ -86,6 +86,13 @@
       <button id="fogClear">Clear all</button>
       <button id="fogAll">Cover all</button>
     </div>
+
+    <div class="section dm-only">
+      <h3>Deployment</h3>
+      <div id="deployInfo" class="deploy-info">unknown</div>
+      <button id="btnUpdate" title="Pull latest from GitHub and rebuild the container">Check for Updates</button>
+      <p class="hint">Triggers a host-side <code>git pull</code> + rebuild. The app will restart if there's a new commit; your session reconnects automatically.</p>
+    </div>
   </aside>
 
   <main>

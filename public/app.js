@@ -104,8 +104,27 @@ function applyState() {
   renderTokenList();
   renderOwners();
   renderPendings();
+  renderDeployment();
   resizeCanvas();
   draw();
+}
+
+function renderDeployment() {
+  const el = $('deployInfo');
+  if (!el) return;
+  const d = state.deployment;
+  if (!d) { el.textContent = 'unknown'; return; }
+  el.innerHTML = '';
+  const sha = document.createElement('code');
+  sha.textContent = d.shortSha || 'unknown';
+  const sep = document.createTextNode(' · ');
+  const subject = document.createElement('span');
+  subject.className = 'deploy-subject';
+  subject.textContent = d.subject || '';
+  subject.title = d.subject || '';
+  el.appendChild(sha);
+  el.appendChild(sep);
+  el.appendChild(subject);
 }
 
 function renderPendings() {
@@ -693,6 +712,12 @@ $('btnUndo').addEventListener('mouseenter', () => {
   const label = state?.undoLabel;
   $('btnUndo').title = label ? `Undo: ${label}` : 'Nothing to undo (Ctrl+Z)';
 });
+
+$('btnUpdate').onclick = () => {
+  if (auth.role !== 'dm') return;
+  if (!confirm('Request an update? The server will git-pull and rebuild on the next host tick. Your session will briefly disconnect and auto-reconnect when the new build is up.')) return;
+  socket.emit('dm:update-request');
+};
 window.addEventListener('keydown', (e) => {
   if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
     const tag = (e.target && e.target.tagName) || '';
