@@ -21,7 +21,24 @@ const server = http.createServer(app);
 const io = new Server(server, { maxHttpBufferSize: 10 * 1024 * 1024 });
 
 app.use(express.json({ limit: '5mb' }));
-app.use(express.static(path.join(__dirname, 'public')));
+
+// --- index.html with cache-busted asset URLs ---
+// Render once at startup: substitute {{VERSION}} with the deployed
+// short SHA so <script src="/app.js?v=abc1234"> forces a fresh fetch
+// on every deploy. Static assets themselves get long-cache headers
+// (browsers rely on the changing query string for invalidation).
+const CACHE_BUST = (() => {
+  const { shortSha } = getDeploymentInfo();
+  return shortSha && shortSha !== 'unknown' ? shortSha : String(Date.now());
+})();
+const INDEX_HTML = fs.readFileSync(path.join(__dirname, 'public', 'index.html'), 'utf8')
+  .replace(/\{\{VERSION\}\}/g, CACHE_BUST);
+app.get(['/', '/index.html'], (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('html').send(INDEX_HTML);
+});
+
+app.use(express.static(path.join(__dirname, 'public'), { index: false, maxAge: '1y', immutable: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // --- DB ---
