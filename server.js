@@ -7,7 +7,8 @@ import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { LIGHT_PRESETS, FACING_VEC, computeRevealed, rollDice, recomputeFog as recomputeFogLogic } from './lib/logic.js';
+import { LIGHT_PRESETS, FACING_VEC, computeRevealed, rollDice, recomputeFog as recomputeFogLogic,
+  createUndoStack, snapshotToken, restoreTokenRow, snapshotWalls, restoreWalls, snapshotMap, snapshotFog } from './lib/logic.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -122,6 +123,10 @@ const pendingMoves = new Map();
 // In-memory pending door actions: "cx,cy,side" -> { actor, toOpen }
 const pendingDoors = new Map();
 
+// In-memory undo stack for DM actions. Cleared when the active map changes.
+const undoStack = createUndoStack();
+function pushUndo(entry) { undoStack.push(entry); }
+
 // Seed default campaign
 const campaignCount = db.prepare('SELECT COUNT(*) c FROM campaigns').get().c;
 if (!campaignCount) {
@@ -191,7 +196,7 @@ function getState() {
   const players = db.prepare('SELECT id, name, role FROM players WHERE campaign_id=?').all(campaign.id);
   const pendings = [...pendingMoves.entries()].map(([id, v]) => ({ id, ...v }));
   const doorPendings = [...pendingDoors.entries()].map(([key, v]) => ({ key, ...v }));
-  return { campaign, maps, activeMap, tokens, fog: fogRow?.data || null, walls, catalog, players, pendings, doorPendings };
+  return { campaign, maps, activeMap, tokens, fog: fogRow?.data || null, walls, catalog, players, pendings, doorPendings, undoLabel: undoStack.topLabel() };
 }
 
 app.get('/api/state', (req, res) => {
@@ -234,6 +239,19 @@ io.on('connection', (socket) => {
     }
     // Direct apply (DM or non-approval mode). Clear any pending on this token.
     pendingMoves.delete(id);
+    if (me.role === 'dm') {
+      const fromX = t.x, fromY = t.y;
+      pushUndo({
+        kind: 'token:move',
+        label: `Move ${t.name || 'token'}`,
+        inverse: () => {
+          db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(fromX, fromY, id);
+          io.emit('token:update', { id, x: fromX, y: fromY });
+          autoRevealForToken(id);
+          broadcastState();
+        },
+      });
+    }
     db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(x, y, id);
     io.emit('token:update', { id, x, y });
     autoRevealForToken(id);
@@ -250,6 +268,18 @@ io.on('connection', (socket) => {
       data.ac || 10, data.light_radius || 0, data.light_type || 'none', data.facing || 0,
       data.color || '#2a2a2a', data.owner_id || null, data.size || 1
     );
+    if (me.role === 'dm') {
+      const newId = info.lastInsertRowid;
+      pushUndo({
+        kind: 'token:create',
+        label: `Create ${data.name || 'token'}`,
+        inverse: () => {
+          db.prepare('DELETE FROM tokens WHERE id=?').run(newId);
+          recomputeFog(map.id);
+          broadcastState();
+        },
+      });
+    }
     autoRevealForToken(info.lastInsertRowid);
     broadcastState();
   });
@@ -262,6 +292,18 @@ io.on('connection', (socket) => {
     const sets = [], vals = [];
     for (const f of fields) if (f in data) { sets.push(`${f}=?`); vals.push(data[f]); }
     if (!sets.length) return;
+    if (me.role === 'dm') {
+      const prev = snapshotToken(db, data.id);
+      pushUndo({
+        kind: 'token:update',
+        label: `Update ${t.name || 'token'}`,
+        inverse: () => {
+          restoreTokenRow(db, prev);
+          autoRevealForToken(data.id);
+          broadcastState();
+        },
+      });
+    }
     vals.push(data.id);
     db.prepare(`UPDATE tokens SET ${sets.join(',')} WHERE id=?`).run(...vals);
     autoRevealForToken(data.id);
@@ -270,10 +312,20 @@ io.on('connection', (socket) => {
 
   socket.on('token:delete', ({ id }) => {
     if (!requireDM(socket)) return;
-    const t = db.prepare('SELECT map_id FROM tokens WHERE id=?').get(id);
+    const prev = snapshotToken(db, id);
+    if (!prev) return;
     pendingMoves.delete(id);
     db.prepare('DELETE FROM tokens WHERE id=?').run(id);
-    if (t) recomputeFog(t.map_id);
+    pushUndo({
+      kind: 'token:delete',
+      label: `Delete ${prev.name || 'token'}`,
+      inverse: () => {
+        restoreTokenRow(db, prev);
+        recomputeFog(prev.map_id);
+        broadcastState();
+      },
+    });
+    recomputeFog(prev.map_id);
     broadcastState();
   });
 
@@ -284,6 +336,17 @@ io.on('connection', (socket) => {
     const sets = [], vals = [];
     for (const f of fields) if (f in data) { sets.push(`${f}=?`); vals.push(data[f]); }
     if (!sets.length) return;
+    const prev = snapshotMap(db, map.id);
+    pushUndo({
+      kind: 'map:update',
+      label: 'Map settings',
+      inverse: () => {
+        db.prepare('UPDATE maps SET name=?, grid_type=?, grid_size=?, width=?, height=?, background=? WHERE id=?')
+          .run(prev.name, prev.grid_type, prev.grid_size, prev.width, prev.height, prev.background, prev.id);
+        recomputeFog(prev.id);
+        broadcastState();
+      },
+    });
     vals.push(map.id);
     db.prepare(`UPDATE maps SET ${sets.join(',')} WHERE id=?`).run(...vals);
     recomputeFog(map.id);
@@ -303,6 +366,7 @@ io.on('connection', (socket) => {
     const campaign = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
     db.prepare('UPDATE maps SET active=0 WHERE campaign_id=?').run(campaign.id);
     db.prepare('UPDATE maps SET active=1 WHERE id=?').run(id);
+    undoStack.clear();
     broadcastState();
   });
 
@@ -323,18 +387,46 @@ io.on('connection', (socket) => {
   socket.on('fog:update', ({ data }) => {
     if (!requireDM(socket)) return;
     const map = getActiveMap();
+    const prev = snapshotFog(db, map.id);
+    pushUndo({
+      kind: 'fog:update',
+      label: 'Fog paint',
+      inverse: () => {
+        if (prev == null) {
+          db.prepare('DELETE FROM fog WHERE map_id=?').run(map.id);
+          io.emit('fog:state', { data: '[]' });
+        } else {
+          db.prepare('INSERT INTO fog (map_id, data) VALUES (?,?) ON CONFLICT(map_id) DO UPDATE SET data=excluded.data').run(map.id, prev);
+          io.emit('fog:state', { data: prev });
+        }
+        broadcastState();
+      },
+    });
     db.prepare('INSERT INTO fog (map_id, data) VALUES (?,?) ON CONFLICT(map_id) DO UPDATE SET data=excluded.data').run(map.id, data);
     io.emit('fog:state', { data });
+    broadcastState();
   });
 
   socket.on('wall:toggle', ({ cx, cy, side }) => {
     if (!requireDM(socket)) return;
     const map = getActiveMap();
+    const prev = snapshotWalls(db, map.id);
     const existing = db.prepare('SELECT kind FROM walls WHERE map_id=? AND cx=? AND cy=? AND side=?').get(map.id, cx, cy, side);
     if (existing) db.prepare('DELETE FROM walls WHERE map_id=? AND cx=? AND cy=? AND side=?').run(map.id, cx, cy, side);
     else db.prepare("INSERT INTO walls (map_id, cx, cy, side, kind, open) VALUES (?,?,?,?,'wall',0)").run(map.id, cx, cy, side);
+    pushUndo({
+      kind: 'wall:toggle',
+      label: existing ? 'Delete wall' : 'Create wall',
+      inverse: () => {
+        restoreWalls(db, map.id, prev);
+        io.emit('walls:state', snapshotWalls(db, map.id));
+        recomputeFog(map.id);
+        broadcastState();
+      },
+    });
     io.emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
     recomputeFog(map.id);
+    broadcastState();
   });
 
   socket.on('door:request', ({ cx, cy, side }) => {
@@ -373,6 +465,17 @@ io.on('connection', (socket) => {
   socket.on('door:cycle', ({ cx, cy, side }) => {
     if (!requireDM(socket)) return;
     const map = getActiveMap();
+    const prev = snapshotWalls(db, map.id);
+    pushUndo({
+      kind: 'door:cycle',
+      label: 'Door cycle',
+      inverse: () => {
+        restoreWalls(db, map.id, prev);
+        io.emit('walls:state', snapshotWalls(db, map.id));
+        recomputeFog(map.id);
+        broadcastState();
+      },
+    });
     const existing = db.prepare('SELECT kind, open FROM walls WHERE map_id=? AND cx=? AND cy=? AND side=?').get(map.id, cx, cy, side);
     // cycle: none -> closed door -> open door -> none (wall gets replaced by closed door)
     if (!existing) {
@@ -391,14 +494,37 @@ io.on('connection', (socket) => {
   socket.on('wall:clear', () => {
     if (!requireDM(socket)) return;
     const map = getActiveMap();
+    const prev = snapshotWalls(db, map.id);
+    pushUndo({
+      kind: 'wall:clear',
+      label: 'Clear walls',
+      inverse: () => {
+        restoreWalls(db, map.id, prev);
+        io.emit('walls:state', snapshotWalls(db, map.id));
+        recomputeFog(map.id);
+        broadcastState();
+      },
+    });
     db.prepare('DELETE FROM walls WHERE map_id=?').run(map.id);
     io.emit('walls:state', []);
     recomputeFog(map.id);
+    broadcastState();
   });
 
   socket.on('wall:rect', ({ x1, y1, x2, y2 }) => {
     if (!requireDM(socket)) return;
     const map = getActiveMap();
+    const prev = snapshotWalls(db, map.id);
+    pushUndo({
+      kind: 'wall:rect',
+      label: 'Room walls',
+      inverse: () => {
+        restoreWalls(db, map.id, prev);
+        io.emit('walls:state', snapshotWalls(db, map.id));
+        recomputeFog(map.id);
+        broadcastState();
+      },
+    });
     const minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
     const minY = Math.min(y1, y2), maxY = Math.max(y1, y2);
     const ins = db.prepare('INSERT OR IGNORE INTO walls (map_id, cx, cy, side) VALUES (?,?,?,?)');
@@ -431,6 +557,14 @@ io.on('connection', (socket) => {
   socket.on('dice:roll', ({ expr }) => {
     const result = rollDice(expr);
     io.emit('chat:msg', { from: me.name, role: me.role, text: `🎲 ${expr} = **${result.total}** (${result.rolls.join(', ')})`, ts: Date.now() });
+  });
+
+  socket.on('dm:undo', () => {
+    if (!requireDM(socket)) return;
+    const entry = undoStack.pop();
+    if (!entry) { broadcastState(); return; }
+    try { entry.inverse(); } catch (e) { console.error('undo failed', e); }
+    broadcastState();
   });
 
   socket.on('approval:resolve', ({ approved, tokenId }) => {
