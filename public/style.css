@@ -158,3 +158,8 @@ body.player .dm-only { display: none; }
 
 .hint { font-size: 11px; color: var(--ink-soft); font-style: italic; margin: 4px 0 0; }
 .section button.active { background: var(--ink); color: var(--paper); }
+
+.map-row { display: flex; align-items: center; gap: 4px; padding: 3px 0; border-bottom: 1px dashed rgba(0,0,0,.15); }
+.map-row.active { font-weight: bold; }
+.map-row .map-name { flex: 1; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.map-row button { font-size: 11px; padding: 2px 5px; }
