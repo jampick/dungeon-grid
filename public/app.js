@@ -10,8 +10,25 @@ let editingTokenId = null;
 let selectedTokenId = null;
 let dragging = null;
 let view = { scale: 1, ox: 0, oy: 0 };
+const LIGHT_PRESETS = {
+  none:        { radius: 0,  cone: false },
+  candle:      { radius: 2,  cone: false },
+  torch:       { radius: 3,  cone: false },
+  lantern:     { radius: 6,  cone: false },
+  bullseye:    { radius: 12, cone: true  },
+  light_spell: { radius: 4,  cone: false },
+  continual:   { radius: 12, cone: false },
+  infravision: { radius: 12, cone: false },
+};
+const FACING_RAD = [
+  -Math.PI/2, -Math.PI/4, 0, Math.PI/4, Math.PI/2, 3*Math.PI/4, Math.PI, -3*Math.PI/4
+];
+
 let fogMode = null; // 'reveal' | 'hide' | null
 let fogCells = new Set();
+let wallMode = null; // 'edge' | 'room' | null
+let walls = new Map(); // "cx,cy,side" -> { kind, open }
+let roomDrag = null; // {x1,y1,x2,y2}
 
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
@@ -52,12 +69,9 @@ function connectSocket() {
     if (t) { if (x !== undefined) t.x = x; if (y !== undefined) t.y = y; draw(); }
   });
   socket.on('fog:state', ({ data }) => { loadFog(data); draw(); });
+  socket.on('walls:state', (list) => { loadWalls(list); draw(); });
   socket.on('chat:msg', onChat);
-  socket.on('approval:request', (r) => {
-    if (auth.role !== 'dm') return;
-    showApproval(r);
-  });
-  socket.on('approval:resolved', () => { $('approvalBox').classList.add('hidden'); });
+  socket.on('approval:request', () => {}); // legacy
 }
 
 function applyState() {
@@ -72,10 +86,34 @@ function applyState() {
   $('showOtherHp').checked = !!state.campaign.show_other_hp;
   $('ruleset').value = state.campaign.ruleset || '1e';
   loadFog(state.fog);
+  loadWalls(state.walls || []);
   renderTokenList();
   renderOwners();
+  renderPendings();
   resizeCanvas();
   draw();
+}
+
+function renderPendings() {
+  const box = $('approvalBox');
+  if (auth.role !== 'dm' || !state.pendings?.length) {
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    return;
+  }
+  box.classList.remove('hidden');
+  box.innerHTML = '<h4>Pending moves</h4>';
+  for (const p of state.pendings) {
+    const t = state.tokens.find(x => x.id === p.id);
+    const name = t?.name || `#${p.id}`;
+    const row = document.createElement('div');
+    row.className = 'pending';
+    row.innerHTML = `<b>${escapeHtml(p.actor)}</b> → ${escapeHtml(name)} (${p.fromX},${p.fromY}) → (${p.toX},${p.toY})
+      <br/><button class="ok">Approve</button> <button class="no">Deny</button>`;
+    row.querySelector('.ok').onclick = () => socket.emit('approval:resolve', { approved: true, tokenId: p.id });
+    row.querySelector('.no').onclick = () => socket.emit('approval:resolve', { approved: false, tokenId: p.id });
+    box.appendChild(row);
+  }
 }
 
 function renderTokenList() {
@@ -112,6 +150,24 @@ function resizeCanvas() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 window.addEventListener('resize', () => { resizeCanvas(); draw(); });
+if (window.ResizeObserver) {
+  const ro = new ResizeObserver(() => { resizeCanvas(); draw(); });
+  ro.observe(document.getElementById('sidebar'));
+  ro.observe(document.getElementById('right'));
+}
+
+$('toggleLeft').onclick = () => {
+  const el = $('sidebar');
+  el.classList.toggle('collapsed');
+  $('toggleLeft').textContent = el.classList.contains('collapsed') ? '›' : '‹';
+  setTimeout(() => { resizeCanvas(); draw(); }, 0);
+};
+$('toggleRight').onclick = () => {
+  const el = $('right');
+  el.classList.toggle('collapsed');
+  $('toggleRight').textContent = el.classList.contains('collapsed') ? '‹' : '›';
+  setTimeout(() => { resizeCanvas(); draw(); }, 0);
+};
 
 function worldToScreen(x, y) {
   return { x: x * view.scale + view.ox, y: y * view.scale + view.oy };
@@ -159,29 +215,140 @@ function draw() {
   if (m.grid_type === 'square') drawSquareGrid(m.width, m.height, size);
   else drawHexGrid(m.width, m.height, size);
 
-  // light sources (soft circles)
+  const isDM = auth.role === 'dm';
+  const cellVisible = (x, y) => !fogCells.has(`${x},${y}`);
+  const tokenVisibleToMe = (t) => isDM || (t.owner_id && t.owner_id === me.playerId) || cellVisible(t.x, t.y);
+
+  // light sources (soft glow) — only from tokens visible to me
   for (const t of state.tokens) {
-    if (!t.light_radius) continue;
+    if (!tokenVisibleToMe(t)) continue;
+    const preset = LIGHT_PRESETS[t.light_type || 'none'] || LIGHT_PRESETS.none;
+    const r = (t.light_radius > 0 ? t.light_radius : preset.radius) * size;
+    if (r <= 0) continue;
     const cx = (t.x + 0.5) * size, cy = (t.y + 0.5) * size;
-    const r = t.light_radius * size;
     const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    g.addColorStop(0, 'rgba(255, 220, 130, 0.35)');
+    g.addColorStop(0, 'rgba(255, 220, 130, 0.38)');
     g.addColorStop(1, 'rgba(255, 220, 130, 0)');
     ctx.fillStyle = g;
-    ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath();
+    if (preset.cone) {
+      const facing = FACING_RAD[(t.facing || 0) % 8];
+      const half = Math.PI / 3; // 60° half-angle for playability
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, r, facing - half, facing + half);
+      ctx.closePath();
+    } else {
+      ctx.arc(cx, cy, r, 0, Math.PI*2);
+    }
+    ctx.fill();
   }
 
-  // fog overlay (drawn as dark paper patches)
+  // fog overlay — opaque for players (hides bg/walls), translucent for DM
   if (fogCells.size) {
-    ctx.fillStyle = 'rgba(42,42,42,0.82)';
+    ctx.fillStyle = isDM ? 'rgba(42,42,42,0.55)' : 'rgba(30,26,20,1)';
     for (const key of fogCells) {
       const [fx, fy] = key.split(',').map(Number);
       ctx.fillRect(fx * size, fy * size, size, size);
     }
   }
 
-  // tokens
-  for (const t of state.tokens) drawToken(t, size);
+  // walls & doors — visible if either bordering cell is visible (for players)
+  ctx.lineCap = 'round';
+  for (const [key, info] of walls) {
+    const [cx, cy, side] = key.split(',');
+    const ix = +cx, iy = +cy;
+    if (!isDM) {
+      const a = cellVisible(ix, iy);
+      const b = side === 'n' ? cellVisible(ix, iy - 1) : cellVisible(ix - 1, iy);
+      if (!a && !b) continue;
+    }
+    const x = ix * size, y = iy * size;
+    // edge endpoints
+    const x1 = x, y1 = y;
+    const x2 = side === 'n' ? x + size : x;
+    const y2 = side === 'n' ? y : y + size;
+    if (info.kind === 'wall') {
+      ctx.strokeStyle = '#2a2a2a';
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    } else if (info.kind === 'door') {
+      // mid third = door leaf, outer thirds = wall flanking
+      const fx = (x2 - x1), fy = (y2 - y1);
+      const aX = x1 + fx * 0.2, aY = y1 + fy * 0.2;
+      const bX = x1 + fx * 0.8, bY = y1 + fy * 0.8;
+      ctx.strokeStyle = '#2a2a2a';
+      ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(aX, aY); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(bX, bY); ctx.lineTo(x2, y2); ctx.stroke();
+      if (!info.open) {
+        // closed door: brown rectangle between a and b
+        ctx.strokeStyle = '#6b3b1a';
+        ctx.lineWidth = 5;
+        ctx.beginPath(); ctx.moveTo(aX, aY); ctx.lineTo(bX, bY); ctx.stroke();
+        // small handle dot
+        ctx.fillStyle = '#e8c77a';
+        ctx.beginPath();
+        ctx.arc((aX + bX) / 2 + (fy ? 3 : 0), (aY + bY) / 2 + (fx ? 3 : 0), 1.8, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        // open door: two short brown ticks perpendicular to the edge at a and b
+        ctx.strokeStyle = '#6b3b1a';
+        ctx.lineWidth = 3;
+        const nx = -fy / size, ny = fx / size; // unit perpendicular
+        const L = size * 0.22;
+        ctx.beginPath();
+        ctx.moveTo(aX, aY); ctx.lineTo(aX + nx * L, aY + ny * L);
+        ctx.moveTo(bX, bY); ctx.lineTo(bX + nx * L, bY + ny * L);
+        ctx.stroke();
+      }
+    }
+  }
+  ctx.lineWidth = 1;
+
+  // room drag preview
+  if (roomDrag) {
+    const { x1, y1, x2, y2 } = roomDrag;
+    const minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
+    const minY = Math.min(y1, y2), maxY = Math.max(y1, y2);
+    ctx.strokeStyle = 'rgba(122,46,46,0.8)';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(minX * size, minY * size, (maxX - minX + 1) * size, (maxY - minY + 1) * size);
+    ctx.setLineDash([]);
+    ctx.lineWidth = 1;
+  }
+
+  // pending approval ghosts — DM only
+  if (isDM && state.pendings?.length) {
+    for (const p of state.pendings) {
+      const fx = (p.fromX + 0.5) * size, fy = (p.fromY + 0.5) * size;
+      const tx = (p.toX + 0.5) * size, ty = (p.toY + 0.5) * size;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(122,46,46,0.8)';
+      ctx.lineWidth = 2;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath(); ctx.moveTo(fx, fy); ctx.lineTo(tx, ty); ctx.stroke();
+      // ghost circle at destination
+      ctx.beginPath();
+      ctx.arc(tx, ty, size * 0.42, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(244,236,216,0.6)';
+      ctx.fill();
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.fillStyle = 'rgba(122,46,46,0.9)';
+      ctx.font = `${Math.floor(size * 0.2)}px Georgia, serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('?', tx, ty);
+      ctx.restore();
+    }
+  }
+
+  // tokens — only those visible to me
+  for (const t of state.tokens) {
+    if (!tokenVisibleToMe(t)) continue;
+    drawToken(t, size);
+  }
 
   ctx.restore();
 }
@@ -237,6 +404,17 @@ function drawToken(t, size) {
   ctx.strokeStyle = t.color || '#2a2a2a';
   ctx.stroke();
 
+  // facing tick (small notch pointing outward)
+  if (t.facing != null) {
+    const a = FACING_RAD[t.facing % 8];
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * r * 0.6, cy + Math.sin(a) * r * 0.6);
+    ctx.lineTo(cx + Math.cos(a) * r * 1.05, cy + Math.sin(a) * r * 1.05);
+    ctx.strokeStyle = t.color || '#2a2a2a';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+  }
+
   ctx.fillStyle = '#2a2a2a';
   ctx.font = `${Math.floor(size * 0.22)}px Georgia, serif`;
   ctx.textAlign = 'center';
@@ -271,6 +449,27 @@ canvas.addEventListener('mousedown', (e) => {
   const size = m.grid_size;
   const cellX = Math.floor(w.x / size), cellY = Math.floor(w.y / size);
 
+  if ((wallMode === 'edge' || wallMode === 'door') && auth.role === 'dm') {
+    // nearest edge of the cell
+    const lx = w.x - cellX * size;
+    const ly = w.y - cellY * size;
+    const dN = ly, dS = size - ly, dW = lx, dE = size - lx;
+    const min = Math.min(dN, dS, dW, dE);
+    let cx = cellX, cy = cellY, side = 'n';
+    if (min === dN) { side = 'n'; }
+    else if (min === dS) { side = 'n'; cy = cellY + 1; }
+    else if (min === dW) { side = 'w'; }
+    else { side = 'w'; cx = cellX + 1; }
+    socket.emit(wallMode === 'door' ? 'door:cycle' : 'wall:toggle', { cx, cy, side });
+    return;
+  }
+  if (wallMode === 'room' && auth.role === 'dm') {
+    roomDrag = { x1: cellX, y1: cellY, x2: cellX, y2: cellY };
+    dragging = { mode: 'room' };
+    draw();
+    return;
+  }
+
   if (fogMode && auth.role === 'dm') {
     const key = `${cellX},${cellY}`;
     if (fogMode === 'reveal') fogCells.delete(key); else fogCells.add(key);
@@ -291,7 +490,7 @@ canvas.addEventListener('mousedown', (e) => {
     const r = size * 0.42 * (t.size || 1);
     if ((w.x - cx)**2 + (w.y - cy)**2 <= r*r) {
       if (auth.role !== 'dm' && t.owner_id !== me.playerId) return;
-      dragging = { mode: 'token', id: t.id };
+      dragging = { mode: 'token', id: t.id, origX: t.x, origY: t.y };
       selectedTokenId = t.id;
       return;
     }
@@ -302,6 +501,14 @@ canvas.addEventListener('mousemove', (e) => {
   if (!dragging) return;
   const rect = canvas.getBoundingClientRect();
   const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+  if (dragging.mode === 'room') {
+    const w = screenToWorld(sx, sy);
+    const size = state.activeMap.grid_size;
+    roomDrag.x2 = Math.floor(w.x / size);
+    roomDrag.y2 = Math.floor(w.y / size);
+    draw();
+    return;
+  }
   if (dragging.mode === 'pan') {
     view.ox = dragging.ox + (sx - dragging.sx);
     view.oy = dragging.oy + (sy - dragging.sy);
@@ -327,7 +534,20 @@ canvas.addEventListener('mousemove', (e) => {
 canvas.addEventListener('mouseup', () => {
   if (dragging?.mode === 'token') {
     const t = state.tokens.find(t => t.id === dragging.id);
-    if (t) socket.emit('token:move', { id: t.id, x: t.x, y: t.y });
+    if (t) {
+      const targetX = t.x, targetY = t.y;
+      // In approval mode, snap back to original until DM resolves
+      if (state.campaign.approval_mode && auth.role !== 'dm') {
+        t.x = dragging.origX; t.y = dragging.origY;
+        draw();
+      }
+      socket.emit('token:move', { id: dragging.id, x: targetX, y: targetY });
+    }
+  }
+  if (dragging?.mode === 'room' && roomDrag) {
+    socket.emit('wall:rect', roomDrag);
+    roomDrag = null;
+    draw();
   }
   if (fogMode) pushFog();
   dragging = null;
@@ -383,6 +603,8 @@ function openTokenDialog(id) {
   $('tkHpMax').value = t?.hp_max ?? 10;
   $('tkAc').value = t?.ac ?? 10;
   $('tkLight').value = t?.light_radius ?? 0;
+  $('tkLightType').value = t?.light_type || 'none';
+  $('tkFacing').value = t?.facing ?? 0;
   $('tkColor').value = t?.color || '#2a2a2a';
   $('tkOwner').value = t?.owner_id || '';
   $('tkDelete').style.display = id && auth.role === 'dm' ? '' : 'none';
@@ -397,6 +619,8 @@ $('tkSave').onclick = async () => {
     hp_max: parseInt($('tkHpMax').value, 10),
     ac: parseInt($('tkAc').value, 10),
     light_radius: parseInt($('tkLight').value, 10),
+    light_type: $('tkLightType').value,
+    facing: parseInt($('tkFacing').value, 10),
     color: $('tkColor').value,
     owner_id: $('tkOwner').value ? parseInt($('tkOwner').value, 10) : null,
   };
@@ -435,6 +659,23 @@ function pushFog() {
 function loadFog(data) {
   try { fogCells = new Set(JSON.parse(data || '[]')); } catch { fogCells = new Set(); }
 }
+function loadWalls(list) {
+  walls = new Map(list.map(w => [`${w.cx},${w.cy},${w.side}`, { kind: w.kind || 'wall', open: !!w.open }]));
+}
+
+// Wall tool buttons
+function setWallMode(m) {
+  wallMode = wallMode === m ? null : m;
+  if (wallMode) fogMode = null;
+  for (const id of ['wallEdge','wallRoom','doorTool']) $(id).classList.remove('active');
+  if (wallMode === 'edge') $('wallEdge').classList.add('active');
+  if (wallMode === 'room') $('wallRoom').classList.add('active');
+  if (wallMode === 'door') $('doorTool').classList.add('active');
+}
+$('wallEdge').onclick = () => setWallMode('edge');
+$('wallRoom').onclick = () => setWallMode('room');
+$('doorTool').onclick = () => setWallMode('door');
+$('wallClear').onclick = () => { if (confirm('Clear all walls and doors?')) socket.emit('wall:clear'); };
 
 // ---- Dice + Chat ----
 document.querySelectorAll('.dice button[data-d]').forEach(b => {
@@ -460,15 +701,21 @@ function onChat(m) {
 }
 function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
-// ---- Approval ----
-function showApproval(r) {
-  const box = $('approvalBox');
-  box.classList.remove('hidden');
-  box.innerHTML = `<b>${r.actor}</b> wants to ${r.kind}<br/>
-    <button id="apYes">Approve</button> <button id="apNo">Deny</button>`;
-  $('apYes').onclick = () => socket.emit('approval:resolve', { approved: true, kind: r.kind, payload: r.payload });
-  $('apNo').onclick = () => socket.emit('approval:resolve', { approved: false, kind: r.kind, payload: r.payload });
-}
+
+// ---- facing hotkeys (Q/E rotate selected token) ----
+document.addEventListener('keydown', (e) => {
+  if (document.activeElement && ['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) return;
+  if (!selectedTokenId) return;
+  const t = state?.tokens.find(t => t.id === selectedTokenId);
+  if (!t) return;
+  if (auth.role !== 'dm' && t.owner_id !== me.playerId) return;
+  let delta = 0;
+  if (e.key === 'q' || e.key === 'Q') delta = -1;
+  else if (e.key === 'e' || e.key === 'E') delta = 1;
+  else return;
+  const facing = ((t.facing || 0) + delta + 8) % 8;
+  socket.emit('token:update', { id: t.id, facing });
+});
 
 // ---- boot ----
 if (auth) enterApp();

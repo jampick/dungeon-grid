@@ -42,18 +42,58 @@ body {
 
 /* App layout */
 #app {
-  display: grid;
-  grid-template-columns: 240px 1fr 260px;
+  display: flex;
   height: 100vh;
 }
-#sidebar, #right {
-  overflow-y: auto;
+#sidebar {
+  width: 240px;
+  min-width: 180px;
+  max-width: 600px;
+  flex: 0 0 auto;
+  overflow: auto;
   padding: 12px;
   border-right: 1px solid var(--ink);
   background: var(--paper);
+  resize: horizontal;
 }
-#right { border-right: none; border-left: 1px solid var(--ink); display: flex; flex-direction: column; }
-main { display: flex; flex-direction: column; background: var(--paper); }
+#right {
+  width: 260px;
+  min-width: 180px;
+  max-width: 600px;
+  flex: 0 0 auto;
+  overflow: auto;
+  padding: 12px;
+  border-left: 1px solid var(--ink);
+  background: var(--paper);
+  display: flex;
+  flex-direction: column;
+  resize: horizontal;
+  direction: rtl;
+}
+#right > * { direction: ltr; }
+#sidebar.collapsed, #right.collapsed { display: none; }
+.collapse-btn {
+  position: fixed;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 100;
+  width: 18px; height: 48px;
+  background: var(--paper);
+  border: 1px solid var(--ink);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 14px;
+  padding: 0;
+}
+.collapse-btn.left { left: 0; border-left: none; }
+.collapse-btn.right { right: 0; border-right: none; }
+main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--paper);
+}
 
 .section { padding: 8px 0; border-bottom: 1px dashed var(--ink-soft); }
 .section.grow { flex: 1; display: flex; flex-direction: column; min-height: 0; }
@@ -97,8 +137,11 @@ main { display: flex; flex-direction: column; background: var(--paper); }
   position: fixed; top: 60px; right: 280px;
   background: var(--paper); border: 2px solid var(--accent);
   padding: 12px; box-shadow: 3px 3px 0 rgba(0,0,0,.2);
-  z-index: 50;
+  z-index: 50; max-width: 320px;
 }
+#approvalBox h4 { margin: 0 0 6px; font-variant: small-caps; border-bottom: 1px solid var(--accent); }
+#approvalBox .pending { margin: 6px 0; padding: 4px 0; border-bottom: 1px dashed var(--ink-soft); font-size: 13px; }
+#approvalBox button { font: inherit; padding: 2px 8px; background: var(--paper); border: 1px solid var(--ink); cursor: pointer; margin-top: 4px; }
 
 dialog {
   background: var(--paper); color: var(--ink);
@@ -112,3 +155,6 @@ dialog button { font: inherit; padding: 6px 12px; background: var(--paper); bord
 dialog button.danger { color: var(--accent); }
 
 body.player .dm-only { display: none; }
+
+.hint { font-size: 11px; color: var(--ink-soft); font-style: italic; margin: 4px 0 0; }
+.section button.active { background: var(--ink); color: var(--paper); }

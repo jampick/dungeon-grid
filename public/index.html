@@ -24,6 +24,7 @@
 </div>
 
 <div id="app" class="hidden">
+  <button id="toggleLeft" class="collapse-btn left" title="Toggle left panel">‹</button>
   <aside id="sidebar">
     <div class="section">
       <h3>You</h3>
@@ -63,6 +64,15 @@
     </div>
 
     <div class="section dm-only">
+      <h3>Walls &amp; Doors</h3>
+      <button id="wallEdge">Wall edge</button>
+      <button id="wallRoom">Room (drag)</button>
+      <button id="doorTool">Door</button>
+      <button id="wallClear">Clear all</button>
+      <p class="hint">Wall edge: click a cell edge to toggle wall. Room: drag a rectangle. Door: click a cell edge — cycles none → closed → open → none.</p>
+    </div>
+
+    <div class="section dm-only">
       <h3>Fog</h3>
       <button id="fogReveal">Reveal brush</button>
       <button id="fogHide">Hide brush</button>
@@ -82,6 +92,7 @@
     <canvas id="board"></canvas>
   </main>
 
+  <button id="toggleRight" class="collapse-btn right" title="Toggle right panel">›</button>
   <aside id="right">
     <div class="section">
       <h3>Dice</h3>
@@ -118,7 +129,27 @@
     </label>
     <label>HP <input id="tkHp" type="number" value="10" /> / <input id="tkHpMax" type="number" value="10" /></label>
     <label>AC <input id="tkAc" type="number" value="10" /></label>
-    <label>Light radius (cells) <input id="tkLight" type="number" value="0" /></label>
+    <label>Light source (1e)
+      <select id="tkLightType">
+        <option value="none">none</option>
+        <option value="candle">candle (10 ft)</option>
+        <option value="torch">torch (15 ft)</option>
+        <option value="lantern">hooded lantern (30 ft)</option>
+        <option value="bullseye">bullseye lantern (60 ft cone)</option>
+        <option value="light_spell">light spell (20 ft)</option>
+        <option value="continual">continual light (60 ft)</option>
+        <option value="infravision">infravision (60 ft)</option>
+      </select>
+    </label>
+    <label>Facing
+      <select id="tkFacing">
+        <option value="0">N</option><option value="1">NE</option>
+        <option value="2">E</option><option value="3">SE</option>
+        <option value="4">S</option><option value="5">SW</option>
+        <option value="6">W</option><option value="7">NW</option>
+      </select>
+    </label>
+    <label>Custom radius override (cells, 0 = use preset) <input id="tkLight" type="number" value="0" /></label>
     <label>Color <input id="tkColor" type="color" value="#2a2a2a" /></label>
     <label>Owner
       <select id="tkOwner"><option value="">(none)</option></select>

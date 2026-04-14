@@ -53,6 +53,8 @@ CREATE TABLE IF NOT EXISTS tokens (
   hp_current INTEGER, hp_max INTEGER,
   ac INTEGER,
   light_radius INTEGER DEFAULT 0,
+  light_type TEXT DEFAULT 'none',
+  facing INTEGER DEFAULT 0,
   color TEXT DEFAULT '#2a2a2a',
   owner_id INTEGER,
   size INTEGER DEFAULT 1
@@ -75,6 +77,15 @@ CREATE TABLE IF NOT EXISTS fog (
   map_id INTEGER PRIMARY KEY,
   data TEXT
 );
+CREATE TABLE IF NOT EXISTS walls (
+  map_id INTEGER,
+  cx INTEGER,
+  cy INTEGER,
+  side TEXT,
+  kind TEXT DEFAULT 'wall',
+  open INTEGER DEFAULT 0,
+  PRIMARY KEY (map_id, cx, cy, side)
+);
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY,
   campaign_id INTEGER,
@@ -84,6 +95,135 @@ CREATE TABLE IF NOT EXISTS events (
   payload TEXT
 );
 `);
+
+// Migrations for existing DBs
+for (const stmt of [
+  "ALTER TABLE tokens ADD COLUMN light_type TEXT DEFAULT 'none'",
+  "ALTER TABLE tokens ADD COLUMN facing INTEGER DEFAULT 0",
+  "ALTER TABLE walls ADD COLUMN kind TEXT DEFAULT 'wall'",
+  "ALTER TABLE walls ADD COLUMN open INTEGER DEFAULT 0",
+]) { try { db.exec(stmt); } catch {} }
+
+// --- 1e light sources ---
+// radius in cells (5 ft), cone = bullseye only
+const LIGHT_PRESETS = {
+  none:           { radius: 0,  cone: false },
+  candle:         { radius: 2,  cone: false },
+  torch:          { radius: 3,  cone: false },
+  lantern:        { radius: 6,  cone: false },
+  bullseye:       { radius: 12, cone: true  },
+  light_spell:    { radius: 4,  cone: false },
+  continual:      { radius: 12, cone: false },
+  infravision:    { radius: 12, cone: false },
+};
+// facing: 0=N, 1=NE, 2=E, 3=SE, 4=S, 5=SW, 6=W, 7=NW
+const FACING_VEC = [
+  [0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1]
+];
+
+function computeRevealed(token, map, wallSet) {
+  const preset = LIGHT_PRESETS[token.light_type || 'none'] || LIGHT_PRESETS.none;
+  const override = token.light_radius || 0;
+  const r = override > 0 ? override : preset.radius;
+  if (r <= 0) return [];
+  const cx = token.x, cy = token.y;
+  const [fx, fy] = FACING_VEC[(token.facing || 0) % 8];
+  const fmag = Math.hypot(fx, fy) || 1;
+  const fxn = fx / fmag, fyn = fy / fmag;
+
+  // Wall/closed-door between adjacent cells (cardinals only)
+  const blocks = (key) => {
+    const w = wallSet.get(key);
+    if (!w) return false;
+    if (w.kind === 'door' && w.open) return false;
+    return true;
+  };
+  const hasWall = (x1, y1, x2, y2) => {
+    if (x2 === x1 && y2 === y1 - 1) return blocks(`${x1},${y1},n`);
+    if (x2 === x1 && y2 === y1 + 1) return blocks(`${x1},${y2},n`);
+    if (x2 === x1 - 1 && y2 === y1) return blocks(`${x1},${y1},w`);
+    if (x2 === x1 + 1 && y2 === y1) return blocks(`${x2},${y1},w`);
+    return false;
+  };
+
+  // BFS flood fill from token, stopped by walls; include cells within Euclidean radius (and cone).
+  const visited = new Set();
+  const result = [];
+  const start = `${cx},${cy}`;
+  visited.add(start);
+  const queue = [[cx, cy]];
+
+  const withinLight = (x, y) => {
+    const dx = x - cx, dy = y - cy;
+    const dist = Math.hypot(dx, dy);
+    if (dist > r + 0.01) return false;
+    if (preset.cone && (dx !== 0 || dy !== 0)) {
+      const dot = (dx * fxn + dy * fyn) / dist;
+      if (dot < 0.5) return false;
+    }
+    return true;
+  };
+
+  while (queue.length) {
+    const [x, y] = queue.shift();
+    if (withinLight(x, y)) result.push(`${x},${y}`);
+
+    // cardinal neighbors
+    for (const [nx, ny] of [[x, y-1],[x, y+1],[x-1, y],[x+1, y]]) {
+      if (nx < 0 || ny < 0 || nx >= map.width || ny >= map.height) continue;
+      const k = `${nx},${ny}`;
+      if (visited.has(k)) continue;
+      if (hasWall(x, y, nx, ny)) continue;
+      // prune: if straight-line distance already > r, no need to expand
+      if (Math.hypot(nx - cx, ny - cy) > r + 1.5) continue;
+      visited.add(k);
+      queue.push([nx, ny]);
+    }
+    // diagonals — must have both orthogonal gaps open to pass (no light squeezing through corners)
+    for (const [nx, ny] of [[x-1,y-1],[x+1,y-1],[x-1,y+1],[x+1,y+1]]) {
+      if (nx < 0 || ny < 0 || nx >= map.width || ny >= map.height) continue;
+      const k = `${nx},${ny}`;
+      if (visited.has(k)) continue;
+      if (hasWall(x, y, nx, y) || hasWall(nx, y, nx, ny)) continue;
+      if (hasWall(x, y, x, ny) || hasWall(x, ny, nx, ny)) continue;
+      if (Math.hypot(nx - cx, ny - cy) > r + 1.5) continue;
+      visited.add(k);
+      queue.push([nx, ny]);
+    }
+  }
+  return result;
+}
+
+function recomputeFog(mapId) {
+  const map = db.prepare('SELECT * FROM maps WHERE id=?').get(mapId);
+  if (!map) return;
+  const tokens = db.prepare('SELECT * FROM tokens WHERE map_id=?').all(mapId);
+  const wallRows = db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(mapId);
+  const wallSet = new Map(wallRows.map(w => [`${w.cx},${w.cy},${w.side}`, w]));
+  const lit = new Set();
+  for (const t of tokens) {
+    const isParty = t.kind === 'pc' || t.owner_id != null;
+    if (!isParty) continue;
+    for (const key of computeRevealed(t, map, wallSet)) lit.add(key);
+  }
+  const fog = [];
+  for (let x = 0; x < map.width; x++) {
+    for (let y = 0; y < map.height; y++) {
+      const k = `${x},${y}`;
+      if (!lit.has(k)) fog.push(k);
+    }
+  }
+  const data = JSON.stringify(fog);
+  db.prepare('INSERT INTO fog (map_id, data) VALUES (?,?) ON CONFLICT(map_id) DO UPDATE SET data=excluded.data').run(mapId, data);
+  io.emit('fog:state', { data });
+}
+function autoRevealForToken(tokenId) {
+  const t = db.prepare('SELECT map_id FROM tokens WHERE id=?').get(tokenId);
+  if (t) recomputeFog(t.map_id);
+}
+
+// In-memory pending moves (active map only): tokenId -> { fromX, fromY, toX, toY, actor }
+const pendingMoves = new Map();
 
 // Seed default campaign
 const campaignCount = db.prepare('SELECT COUNT(*) c FROM campaigns').get().c;
@@ -149,9 +289,11 @@ function getState() {
   const activeMap = getActiveMap();
   const tokens = activeMap ? db.prepare('SELECT * FROM tokens WHERE map_id=?').all(activeMap.id) : [];
   const fogRow = activeMap ? db.prepare('SELECT data FROM fog WHERE map_id=?').get(activeMap.id) : null;
+  const walls = activeMap ? db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(activeMap.id) : [];
   const catalog = db.prepare('SELECT * FROM catalog').all();
   const players = db.prepare('SELECT id, name, role FROM players WHERE campaign_id=?').all(campaign.id);
-  return { campaign, maps, activeMap, tokens, fog: fogRow?.data || null, catalog, players };
+  const pendings = [...pendingMoves.entries()].map(([id, v]) => ({ id, ...v }));
+  return { campaign, maps, activeMap, tokens, fog: fogRow?.data || null, walls, catalog, players, pendings };
 }
 
 app.get('/api/state', (req, res) => {
@@ -184,28 +326,33 @@ io.on('connection', (socket) => {
   socket.on('token:move', ({ id, x, y }) => {
     const t = db.prepare('SELECT * FROM tokens WHERE id=?').get(id);
     if (!t) return;
-    // Players may only move tokens they own; DM moves anything
     if (me.role !== 'dm' && t.owner_id !== me.id) return;
     const campaign = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
-    // Approval mode: queue the move instead of applying
     if (campaign.approval_mode && me.role !== 'dm') {
-      io.emit('approval:request', { actor: me.name, kind: 'token:move', payload: { id, x, y } });
+      // Queue as pending; original position is whatever is currently committed
+      pendingMoves.set(id, { fromX: t.x, fromY: t.y, toX: x, toY: y, actor: me.name });
+      broadcastState();
       return;
     }
+    // Direct apply (DM or non-approval mode). Clear any pending on this token.
+    pendingMoves.delete(id);
     db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(x, y, id);
     io.emit('token:update', { id, x, y });
+    autoRevealForToken(id);
+    broadcastState();
   });
 
   socket.on('token:create', (data) => {
     if (!requireDM(socket) && data.kind !== 'pc') return;
     const map = getActiveMap();
-    const info = db.prepare(`INSERT INTO tokens (map_id,kind,name,image,x,y,hp_current,hp_max,ac,light_radius,color,owner_id,size)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    const info = db.prepare(`INSERT INTO tokens (map_id,kind,name,image,x,y,hp_current,hp_max,ac,light_radius,light_type,facing,color,owner_id,size)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       map.id, data.kind || 'npc', data.name || '?', data.image || null,
       data.x || 5, data.y || 5, data.hp_current || 10, data.hp_max || 10,
-      data.ac || 10, data.light_radius || 0, data.color || '#2a2a2a',
-      data.owner_id || null, data.size || 1
+      data.ac || 10, data.light_radius || 0, data.light_type || 'none', data.facing || 0,
+      data.color || '#2a2a2a', data.owner_id || null, data.size || 1
     );
+    autoRevealForToken(info.lastInsertRowid);
     broadcastState();
   });
 
@@ -213,18 +360,22 @@ io.on('connection', (socket) => {
     const t = db.prepare('SELECT * FROM tokens WHERE id=?').get(data.id);
     if (!t) return;
     if (me.role !== 'dm' && t.owner_id !== me.id) return;
-    const fields = ['name','hp_current','hp_max','ac','light_radius','color','image','size','kind','owner_id'];
+    const fields = ['name','hp_current','hp_max','ac','light_radius','light_type','facing','color','image','size','kind','owner_id'];
     const sets = [], vals = [];
     for (const f of fields) if (f in data) { sets.push(`${f}=?`); vals.push(data[f]); }
     if (!sets.length) return;
     vals.push(data.id);
     db.prepare(`UPDATE tokens SET ${sets.join(',')} WHERE id=?`).run(...vals);
+    autoRevealForToken(data.id);
     broadcastState();
   });
 
   socket.on('token:delete', ({ id }) => {
     if (!requireDM(socket)) return;
+    const t = db.prepare('SELECT map_id FROM tokens WHERE id=?').get(id);
+    pendingMoves.delete(id);
     db.prepare('DELETE FROM tokens WHERE id=?').run(id);
+    if (t) recomputeFog(t.map_id);
     broadcastState();
   });
 
@@ -237,6 +388,7 @@ io.on('connection', (socket) => {
     if (!sets.length) return;
     vals.push(map.id);
     db.prepare(`UPDATE maps SET ${sets.join(',')} WHERE id=?`).run(...vals);
+    recomputeFog(map.id);
     broadcastState();
   });
 
@@ -265,6 +417,7 @@ io.on('connection', (socket) => {
     if (!sets.length) return;
     vals.push(c.id);
     db.prepare(`UPDATE campaigns SET ${sets.join(',')} WHERE id=?`).run(...vals);
+    if ('approval_mode' in data && !data.approval_mode) pendingMoves.clear();
     broadcastState();
   });
 
@@ -273,6 +426,63 @@ io.on('connection', (socket) => {
     const map = getActiveMap();
     db.prepare('INSERT INTO fog (map_id, data) VALUES (?,?) ON CONFLICT(map_id) DO UPDATE SET data=excluded.data').run(map.id, data);
     io.emit('fog:state', { data });
+  });
+
+  socket.on('wall:toggle', ({ cx, cy, side }) => {
+    if (!requireDM(socket)) return;
+    const map = getActiveMap();
+    const existing = db.prepare('SELECT kind FROM walls WHERE map_id=? AND cx=? AND cy=? AND side=?').get(map.id, cx, cy, side);
+    if (existing) db.prepare('DELETE FROM walls WHERE map_id=? AND cx=? AND cy=? AND side=?').run(map.id, cx, cy, side);
+    else db.prepare("INSERT INTO walls (map_id, cx, cy, side, kind, open) VALUES (?,?,?,?,'wall',0)").run(map.id, cx, cy, side);
+    io.emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
+    recomputeFog(map.id);
+  });
+
+  socket.on('door:cycle', ({ cx, cy, side }) => {
+    if (!requireDM(socket)) return;
+    const map = getActiveMap();
+    const existing = db.prepare('SELECT kind, open FROM walls WHERE map_id=? AND cx=? AND cy=? AND side=?').get(map.id, cx, cy, side);
+    // cycle: none -> closed door -> open door -> none (wall gets replaced by closed door)
+    if (!existing) {
+      db.prepare("INSERT INTO walls (map_id, cx, cy, side, kind, open) VALUES (?,?,?,?,'door',0)").run(map.id, cx, cy, side);
+    } else if (existing.kind === 'wall') {
+      db.prepare("UPDATE walls SET kind='door', open=0 WHERE map_id=? AND cx=? AND cy=? AND side=?").run(map.id, cx, cy, side);
+    } else if (existing.kind === 'door' && !existing.open) {
+      db.prepare("UPDATE walls SET open=1 WHERE map_id=? AND cx=? AND cy=? AND side=?").run(map.id, cx, cy, side);
+    } else {
+      db.prepare('DELETE FROM walls WHERE map_id=? AND cx=? AND cy=? AND side=?').run(map.id, cx, cy, side);
+    }
+    io.emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
+    recomputeFog(map.id);
+  });
+
+  socket.on('wall:clear', () => {
+    if (!requireDM(socket)) return;
+    const map = getActiveMap();
+    db.prepare('DELETE FROM walls WHERE map_id=?').run(map.id);
+    io.emit('walls:state', []);
+    recomputeFog(map.id);
+  });
+
+  socket.on('wall:rect', ({ x1, y1, x2, y2 }) => {
+    if (!requireDM(socket)) return;
+    const map = getActiveMap();
+    const minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
+    const minY = Math.min(y1, y2), maxY = Math.max(y1, y2);
+    const ins = db.prepare('INSERT OR IGNORE INTO walls (map_id, cx, cy, side) VALUES (?,?,?,?)');
+    const tx = db.transaction(() => {
+      for (let x = minX; x <= maxX; x++) {
+        ins.run(map.id, x, minY, 'n');       // top edge
+        ins.run(map.id, x, maxY + 1, 'n');   // bottom edge (= top of row below)
+      }
+      for (let y = minY; y <= maxY; y++) {
+        ins.run(map.id, minX, y, 'w');       // left edge
+        ins.run(map.id, maxX + 1, y, 'w');   // right edge (= left of col to right)
+      }
+    });
+    tx();
+    io.emit('walls:state', db.prepare('SELECT cx, cy, side FROM walls WHERE map_id=?').all(map.id));
+    recomputeFog(map.id);
   });
 
   socket.on('catalog:add', (data) => {
@@ -291,13 +501,16 @@ io.on('connection', (socket) => {
     io.emit('chat:msg', { from: me.name, role: me.role, text: `🎲 ${expr} = **${result.total}** (${result.rolls.join(', ')})`, ts: Date.now() });
   });
 
-  socket.on('approval:resolve', ({ approved, payload, kind }) => {
+  socket.on('approval:resolve', ({ approved, tokenId }) => {
     if (!requireDM(socket)) return;
-    if (approved && kind === 'token:move') {
-      db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(payload.x, payload.y, payload.id);
-      io.emit('token:update', payload);
+    const pending = pendingMoves.get(tokenId);
+    if (!pending) return;
+    pendingMoves.delete(tokenId);
+    if (approved) {
+      db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(pending.toX, pending.toY, tokenId);
+      autoRevealForToken(tokenId);
     }
-    io.emit('approval:resolved', { approved, payload, kind });
+    broadcastState();
   });
 });
 
