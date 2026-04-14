@@ -606,5 +606,4 @@ io.on('connection', (socket) => {
 
 server.listen(PORT, () => {
   console.log(`dungeon-grid running on http://localhost:${PORT}`);
-  console.log(`DM password: ${DM_PASSWORD}`);
 });
