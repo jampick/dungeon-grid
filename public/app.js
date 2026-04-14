@@ -71,6 +71,7 @@ function connectSocket() {
   socket.on('fog:state', ({ data }) => { loadFog(data); draw(); });
   socket.on('walls:state', (list) => { loadWalls(list); draw(); });
   socket.on('chat:msg', onChat);
+  socket.on('chat:cleared', () => { const c = $('chat'); if (c) c.innerHTML = ''; });
   socket.on('approval:request', () => {}); // legacy
 }
 
@@ -733,6 +734,9 @@ $('chatInput').addEventListener('keydown', (e) => {
     if (v) { socket.emit('chat:msg', { text: v }); e.target.value = ''; }
   }
 });
+$('chatClear').onclick = () => {
+  if (confirm('Clear chat for everyone?')) socket.emit('chat:clear');
+};
 function onChat(m) {
   const el = document.createElement('div');
   el.className = 'msg' + (m.role === 'dm' ? ' dm' : '');

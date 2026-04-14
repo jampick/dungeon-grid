@@ -7,7 +7,7 @@ import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
-import { LIGHT_PRESETS, FACING_VEC, computeRevealed, rollDice, recomputeFog as recomputeFogLogic } from './lib/logic.js';
+import { LIGHT_PRESETS, FACING_VEC, computeRevealed, rollDice, recomputeFog as recomputeFogLogic, canClearChat } from './lib/logic.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -426,6 +426,11 @@ io.on('connection', (socket) => {
 
   socket.on('chat:msg', ({ text }) => {
     io.emit('chat:msg', { from: me.name, role: me.role, text, ts: Date.now() });
+  });
+
+  socket.on('chat:clear', () => {
+    if (!canClearChat(me.role)) return;
+    io.emit('chat:cleared', { by: me.name, ts: Date.now() });
   });
 
   socket.on('dice:roll', ({ expr }) => {
