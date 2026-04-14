@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Dungeon Grid</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+<div id="login" class="panel">
+  <h1>Dungeon Grid</h1>
+  <p class="sub">pencil &amp; paper, over the wire</p>
+  <div class="row">
+    <input id="name" placeholder="Your name" />
+  </div>
+  <div class="row">
+    <input id="dmpass" type="password" placeholder="DM password (DM only)" />
+  </div>
+  <div class="row">
+    <button id="btnDM">Login as DM</button>
+    <button id="btnPlayer">Join as Player</button>
+  </div>
+  <p id="loginErr" class="err"></p>
+</div>
+
+<div id="app" class="hidden">
+  <aside id="sidebar">
+    <div class="section">
+      <h3>You</h3>
+      <div id="meInfo"></div>
+    </div>
+
+    <div class="section dm-only">
+      <h3>Map</h3>
+      <div class="row"><label>Grid</label>
+        <select id="gridType"><option value="square">square</option><option value="hex">hex</option></select>
+      </div>
+      <div class="row"><label>Cell px</label><input id="gridSize" type="number" value="50" /></div>
+      <div class="row"><label>W</label><input id="mapW" type="number" value="30" /><label>H</label><input id="mapH" type="number" value="20" /></div>
+      <div class="row"><button id="saveMap">Save Map</button></div>
+      <div class="row"><label>BG image</label><input id="bgFile" type="file" accept="image/*" /></div>
+    </div>
+
+    <div class="section">
+      <h3>Tokens</h3>
+      <div id="tokenList"></div>
+      <div class="dm-only">
+        <button id="addToken">+ Add token</button>
+      </div>
+    </div>
+
+    <div class="section dm-only">
+      <h3>Settings</h3>
+      <label><input type="checkbox" id="approval" /> Approval mode</label><br/>
+      <label><input type="checkbox" id="showOtherHp" /> Show health bars to players</label><br/>
+      <label>Ruleset
+        <select id="ruleset">
+          <option value="1e">AD&amp;D 1e</option>
+          <option value="2e">AD&amp;D 2e</option>
+          <option value="5e">D&amp;D 5e</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="section dm-only">
+      <h3>Fog</h3>
+      <button id="fogReveal">Reveal brush</button>
+      <button id="fogHide">Hide brush</button>
+      <button id="fogClear">Clear all</button>
+      <button id="fogAll">Cover all</button>
+    </div>
+  </aside>
+
+  <main>
+    <div id="toolbar">
+      <span id="mapName"></span>
+      <span class="spacer"></span>
+      <button id="btnZoomIn">+</button>
+      <button id="btnZoomOut">−</button>
+      <button id="btnReset">reset</button>
+    </div>
+    <canvas id="board"></canvas>
+  </main>
+
+  <aside id="right">
+    <div class="section">
+      <h3>Dice</h3>
+      <div class="dice">
+        <button data-d="1d4">d4</button>
+        <button data-d="1d6">d6</button>
+        <button data-d="1d8">d8</button>
+        <button data-d="1d10">d10</button>
+        <button data-d="1d12">d12</button>
+        <button data-d="1d20">d20</button>
+        <button data-d="1d100">d100</button>
+      </div>
+      <div class="row"><input id="customDice" placeholder="e.g. 2d6+3" /><button id="rollCustom">roll</button></div>
+    </div>
+    <div class="section grow">
+      <h3>Chat</h3>
+      <div id="chat"></div>
+      <div class="row"><input id="chatInput" placeholder="say..." /></div>
+    </div>
+  </aside>
+</div>
+
+<dialog id="tokenDialog">
+  <form method="dialog">
+    <h3>Token</h3>
+    <label>Name <input id="tkName" /></label>
+    <label>Kind
+      <select id="tkKind">
+        <option value="pc">PC</option>
+        <option value="npc">NPC</option>
+        <option value="monster">Monster</option>
+        <option value="object">Object</option>
+      </select>
+    </label>
+    <label>HP <input id="tkHp" type="number" value="10" /> / <input id="tkHpMax" type="number" value="10" /></label>
+    <label>AC <input id="tkAc" type="number" value="10" /></label>
+    <label>Light radius (cells) <input id="tkLight" type="number" value="0" /></label>
+    <label>Color <input id="tkColor" type="color" value="#2a2a2a" /></label>
+    <label>Owner
+      <select id="tkOwner"><option value="">(none)</option></select>
+    </label>
+    <label>Image <input id="tkImage" type="file" accept="image/*" /></label>
+    <menu>
+      <button id="tkCancel" type="button">Cancel</button>
+      <button id="tkSave" type="button">Save</button>
+      <button id="tkDelete" type="button" class="danger">Delete</button>
+    </menu>
+  </form>
+</dialog>
+
+<div id="approvalBox" class="hidden"></div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
