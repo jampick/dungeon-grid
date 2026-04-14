@@ -8,6 +8,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { LIGHT_PRESETS, FACING_VEC, computeRevealed, rollDice, recomputeFog as recomputeFogLogic, canClearChat } from './lib/logic.js';
+import { listMaps, createMap as createMapDb, renameMap as renameMapDb, activateMap as activateMapDb, duplicateMap as duplicateMapDb, deleteMap as deleteMapDb } from './lib/maps.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -293,16 +294,33 @@ io.on('connection', (socket) => {
   socket.on('map:create', (data) => {
     if (!requireDM(socket)) return;
     const campaign = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
-    db.prepare('INSERT INTO maps (campaign_id, name, grid_type, grid_size, width, height) VALUES (?,?,?,?,?,?)')
-      .run(campaign.id, data.name || 'New Map', data.grid_type || 'square', data.grid_size || 50, data.width || 30, data.height || 20);
+    const newId = createMapDb(db, campaign.id, data || {});
+    if (data && data.activate) activateMapDb(db, newId);
     broadcastState();
   });
 
   socket.on('map:activate', ({ id }) => {
     if (!requireDM(socket)) return;
-    const campaign = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
-    db.prepare('UPDATE maps SET active=0 WHERE campaign_id=?').run(campaign.id);
-    db.prepare('UPDATE maps SET active=1 WHERE id=?').run(id);
+    activateMapDb(db, id);
+    broadcastState();
+  });
+
+  socket.on('map:rename', ({ id, name }) => {
+    if (!requireDM(socket)) return;
+    renameMapDb(db, id, name);
+    broadcastState();
+  });
+
+  socket.on('map:duplicate', ({ id }) => {
+    if (!requireDM(socket)) return;
+    duplicateMapDb(db, id);
+    broadcastState();
+  });
+
+  socket.on('map:delete', ({ id }) => {
+    if (!requireDM(socket)) return;
+    try { deleteMapDb(db, id); }
+    catch (e) { socket.emit('chat:msg', { from: 'system', role: 'dm', text: `map:delete failed: ${e.message}`, ts: Date.now() }); return; }
     broadcastState();
   });
 

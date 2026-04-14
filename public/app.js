@@ -75,9 +75,21 @@ function connectSocket() {
   socket.on('approval:request', () => {}); // legacy
 }
 
+let lastActiveMapId = null;
 function applyState() {
   const m = state.activeMap;
   if (!m) return;
+  if (lastActiveMapId !== m.id) {
+    // Active map changed — reset per-map client state
+    lastActiveMapId = m.id;
+    bgImg = null;
+    bgUrl = null;
+    fogCells = new Set();
+    walls = new Map();
+    view = { scale: 1, ox: 20, oy: 20 };
+    selectedTokenId = null;
+  }
+  renderMapList();
   $('mapName').textContent = m.name;
   $('gridType').value = m.grid_type;
   $('gridSize').value = m.grid_size;
@@ -126,6 +138,47 @@ function renderPendings() {
     row.querySelector('.ok').onclick = () => socket.emit('door:resolve', { approved: true, key: p.key });
     row.querySelector('.no').onclick = () => socket.emit('door:resolve', { approved: false, key: p.key });
     box.appendChild(row);
+  }
+}
+
+function renderMapList() {
+  const list = $('mapList');
+  if (!list) return;
+  list.innerHTML = '';
+  const maps = state.maps || [];
+  for (const m of maps) {
+    const row = document.createElement('div');
+    row.className = 'map-row' + (m.active ? ' active' : '');
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'map-name';
+    nameSpan.textContent = m.name + (m.active ? ' (active)' : '');
+    nameSpan.title = 'Click to rename';
+    nameSpan.onclick = () => {
+      const next = prompt('Rename map:', m.name);
+      if (next && next.trim() && next !== m.name) {
+        socket.emit('map:rename', { id: m.id, name: next.trim() });
+      }
+    };
+    const btnAct = document.createElement('button');
+    btnAct.textContent = 'Activate';
+    btnAct.disabled = !!m.active;
+    btnAct.onclick = () => socket.emit('map:activate', { id: m.id });
+    const btnDup = document.createElement('button');
+    btnDup.textContent = 'Duplicate';
+    btnDup.onclick = () => socket.emit('map:duplicate', { id: m.id });
+    const btnDel = document.createElement('button');
+    btnDel.textContent = 'Delete';
+    btnDel.onclick = () => {
+      if (maps.length <= 1) { alert('Cannot delete the last map.'); return; }
+      if (confirm(`Delete map "${m.name}"? This removes its tokens, walls, and fog.`)) {
+        socket.emit('map:delete', { id: m.id });
+      }
+    };
+    row.appendChild(nameSpan);
+    row.appendChild(btnAct);
+    row.appendChild(btnDup);
+    row.appendChild(btnDel);
+    list.appendChild(row);
   }
 }
 
@@ -610,6 +663,19 @@ canvas.addEventListener('wheel', (e) => {
 $('btnZoomIn').onclick = () => { view.scale *= 1.15; draw(); };
 $('btnZoomOut').onclick = () => { view.scale /= 1.15; draw(); };
 $('btnReset').onclick = () => { view = { scale: 1, ox: 20, oy: 20 }; draw(); };
+
+// ---- Map Library ----
+$('newMap').onclick = () => {
+  const name = prompt('New map name:', 'New Map');
+  if (!name) return;
+  const grid_type = prompt('Grid type (square or hex):', 'square') || 'square';
+  const widthStr = prompt('Width in cells:', '30');
+  const heightStr = prompt('Height in cells:', '20');
+  const grid_size = parseInt(prompt('Cell px:', '50'), 10) || 50;
+  const width = parseInt(widthStr, 10) || 30;
+  const height = parseInt(heightStr, 10) || 20;
+  socket.emit('map:create', { name: name.trim(), grid_type, grid_size, width, height, activate: true });
+};
 
 // ---- Map settings ----
 $('saveMap').onclick = () => {
