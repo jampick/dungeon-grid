@@ -8,7 +8,8 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { LIGHT_PRESETS, FACING_VEC, computeRevealed, rollDice, recomputeFog as recomputeFogLogic,
-  canClearChat, createUndoStack, snapshotToken, restoreTokenRow, snapshotWalls, restoreWalls, snapshotMap, snapshotFog } from './lib/logic.js';
+  canClearChat, createUndoStack, snapshotToken, restoreTokenRow, snapshotWalls, restoreWalls, snapshotMap, snapshotFog,
+  isReachable } from './lib/logic.js';
 import { listMaps, createMap as createMapDb, renameMap as renameMapDb, activateMap as activateMapDb, duplicateMap as duplicateMapDb, deleteMap as deleteMapDb } from './lib/maps.js';
 import { getDeploymentInfo, TRIGGER_DIR, buildTriggerFilename } from './lib/deployment.js';
 
@@ -39,6 +40,10 @@ app.get(['/', '/index.html'], (req, res) => {
 });
 
 app.use(express.static(path.join(__dirname, 'public'), { index: false, maxAge: '1y', immutable: true }));
+// Serve lib/ as a static asset so the browser client can import the same
+// pure-logic helpers the server uses (computeRevealed, wall collision, ...).
+// The client loads app.js as a module and imports from '/lib/logic.js'.
+app.use('/lib', express.static(path.join(__dirname, 'lib'), { maxAge: '1y', immutable: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // --- DB ---
@@ -267,6 +272,22 @@ io.on('connection', (socket) => {
     const t = db.prepare('SELECT * FROM tokens WHERE id=?').get(id);
     if (!t) return;
     if (me.role !== 'dm' && t.owner_id !== me.id) return;
+    // Defense in depth: a malicious (or buggy) player client could bypass the
+    // client-side wall check and emit any x,y. DMs move freely — they need to
+    // reposition tokens past walls — but players must have a wall-aware path
+    // from the currently committed position to the destination. If not, snap
+    // them back by rebroadcasting authoritative state.
+    if (me.role !== 'dm') {
+      const map = db.prepare('SELECT * FROM maps WHERE id=?').get(t.map_id);
+      const wallRows = db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(t.map_id);
+      const wallSet = new Map(wallRows.map(w => [`${w.cx},${w.cy},${w.side}`, w]));
+      if (!isReachable(t.x, t.y, x, y, map, wallSet, 50)) {
+        // Reject — re-emit the committed position so the client snaps back.
+        socket.emit('token:update', { id, x: t.x, y: t.y });
+        socket.emit('state', getState());
+        return;
+      }
+    }
     const campaign = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
     if (campaign.approval_mode && me.role !== 'dm') {
       // Queue as pending; original position is whatever is currently committed
