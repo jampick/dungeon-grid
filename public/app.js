@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, cacheBustedImageUrl, lightClipRadiusPx, hasLineOfSight, findCopyOffset, shouldStartPan } from '/lib/logic.js?v={{LIB_VERSION}}';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, cacheBustedImageUrl, lightClipRadiusPx, hasLineOfSight, findCopyOffset, shouldStartPan, isTokenSelected } from '/lib/logic.js?v={{LIB_VERSION}}';
 import { getCreatures, SIZE_MULTIPLIERS, sizeMultiplier } from '/lib/creatures.js?v={{LIB_VERSION}}';
 import { getObjects } from '/lib/objects.js?v={{LIB_VERSION}}';
 import { getSpells } from '/lib/spells.js?v={{LIB_VERSION}}';
@@ -1231,6 +1231,21 @@ function drawToken(t, size, offset) {
     ctx.strokeStyle = themeColors.ink;
     ctx.lineWidth = 1;
     ctx.strokeRect(bx, by, bw, bh);
+  }
+
+  // Selection halo: dashed accent ring drawn on top of the token so
+  // the user sees which token is currently selected (mirrors the
+  // sidebar row highlight). Drawn after the body/border/HP so it isn't
+  // hidden behind any later art passes in this function.
+  if (isTokenSelected(t.id, selectedTokenId)) {
+    ctx.save();
+    ctx.strokeStyle = themeColors.accent || '#c77a4a';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, r + 4, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
   }
   ctx.restore();
 }
