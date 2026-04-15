@@ -130,7 +130,7 @@ A Docker Hub mirror is also published at `jampick/dungeon-grid` once the maintai
 npm test
 ```
 
-Uses Node's built-in `node:test` runner. 194 tests across ~35 files covering chat, dice, fog (including memory fog), light (including effective radius and rounded falloff), maps (including random generation and object-catalog placement), creature catalog, sizes, movement range, walls, doors, visibility, undo, owner reassignment on disconnect, cache headers, login, theme, and deployment wiring.
+Uses Node's built-in `node:test` runner. 356 tests across ~60 files covering chat, dice, fog (including memory fog), light (including effective radius and rounded falloff), maps (including random generation and object-catalog placement), creature catalog, sizes, movement range, walls, doors, visibility, undo, owner reassignment on disconnect, cache headers, login, theme, multi-tenant session isolation + migration + auth, session routing helpers, and deployment wiring.
 
 ## Deployment: Synology NAS + Cloudflare Tunnel + Cloudflare Access
 
@@ -238,11 +238,13 @@ SQLite, one file at `data/grid.db`. Tables:
 - `fog` — per-map revealed-cell JSON blob (DM brush overrides)
 - `explored_cells` — per-map set of cells the party has ever seen lit (memory fog "ever-explored" layer)
 - `cell_memory` — per-cell snapshot of what was last seen at each remembered cell (memory fog ghost layer)
-- `players` — per-campaign login records with role (`dm` or `player`)
+- `sessions` — top-level tenant rows (`id`, `name`, `join_password_hash`, per-session approval/ruleset settings, `last_active_at`). Every map/player/catalog row is scoped to a session id.
+- `instance_settings` — global key/value store (currently holds the DM password hash, shared across sessions; rotate via `PUT /api/instance/dm-password`)
+- `players` — per-session login records with role (`dm` or `player`)
 - `catalog` — reusable drag-on object library (table exists; the live object catalog ships from `lib/objects.js`)
 - `events` — audit log placeholder (table exists; not currently written)
 
-Exactly one campaign is supported today. Multi-tenant session isolation is a deferred refactor.
+The app is multi-tenant as of Phase 1. Visit `/` to see the landing page with all sessions, create a new one, or deep-link to `/s/<id>` to join a specific session. Uploaded assets are stored under `uploads/<session_id>/`. The DM password is global to the instance and gates both DM login and new-session creation.
 
 ## Architecture
 
@@ -250,7 +252,6 @@ Express serves static files and upload endpoints; Socket.IO carries the realtime
 
 ## Known limitations
 
-- **Single campaign.** Exactly one global game; multi-tenant session support is a deferred refactor.
 - **No event log.** The `events` table exists but nothing writes to it.
 - **Hex token placement uses square-cell indexing.** Tokens carry `x`, `y` cell coordinates and do not follow true offset-hex math. Visually fine for free-form drag, not suitable for strict hex movement rules.
 - **Infravision is modeled as a regular 60 ft light source.** 1e infravision is darkness-only and heat-based; the simplification is intentional.
