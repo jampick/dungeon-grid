@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius } from '/lib/logic.js?v={{LIB_VERSION}}';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority } from '/lib/logic.js?v={{LIB_VERSION}}';
 import { getCreatures, SIZE_MULTIPLIERS, sizeMultiplier } from '/lib/creatures.js?v={{LIB_VERSION}}';
 import { getObjects } from '/lib/objects.js?v={{LIB_VERSION}}';
 
@@ -1141,29 +1141,41 @@ canvas.addEventListener('mousedown', (e) => {
     return;
   }
 
-  // hit test a token
+  // hit test tokens: collect ALL hits, then prioritize by role/kind so
+  // furniture (kind='object') doesn't block clicks on creatures the user
+  // actually wants to drag. Iterate in reverse so within a kind the most
+  // recently inserted token still wins.
+  const candidates = [];
   for (let i = state.tokens.length - 1; i >= 0; i--) {
     const t = state.tokens[i];
     const cx = (t.x + 0.5) * size, cy = (t.y + 0.5) * size;
     const r = size * 0.42 * (t.size || 1);
-    if ((w.x - cx)**2 + (w.y - cy)**2 <= r*r) {
-      if (auth.role !== 'dm' && t.owner_id !== me.playerId) return;
-      // Track the last unblocked cell so that wall collisions during the
-      // drag can "slide" the token instead of teleporting it through walls.
-      // DM drags skip the wall check (same as the server), so lastValid is
-      // only used for players but we always initialize it for symmetry.
-      dragging = {
-        mode: 'token',
-        id: t.id,
-        origX: t.x,
-        origY: t.y,
-        lastValidX: t.x,
-        lastValidY: t.y,
-        moveBudget: Number.isFinite(t.move) ? t.move : 6,
-      };
-      selectedTokenId = t.id;
-      return;
+    if ((w.x - cx)**2 + (w.y - cy)**2 <= r*r) candidates.push(t);
+  }
+  let chosen = null;
+  if (candidates.length) {
+    if (auth.role === 'dm') {
+      chosen = pickByKindPriority(candidates, ['pc', 'npc', 'monster', 'object', 'effect']);
+    } else {
+      chosen = candidates.find((t) => t.owner_id === me.playerId) || null;
     }
+  }
+  if (chosen) {
+    // Track the last unblocked cell so that wall collisions during the
+    // drag can "slide" the token instead of teleporting it through walls.
+    // DM drags skip the wall check (same as the server), so lastValid is
+    // only used for players but we always initialize it for symmetry.
+    dragging = {
+      mode: 'token',
+      id: chosen.id,
+      origX: chosen.x,
+      origY: chosen.y,
+      lastValidX: chosen.x,
+      lastValidY: chosen.y,
+      moveBudget: Number.isFinite(chosen.move) ? chosen.move : 6,
+    };
+    selectedTokenId = chosen.id;
+    return;
   }
   // hit test a door (near nearest edge, within ~1/3 cell)
   const lx = w.x - cellX * size, ly = w.y - cellY * size;
