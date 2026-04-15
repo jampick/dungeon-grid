@@ -760,16 +760,51 @@ function drawHex(cx, cy, r) {
   ctx.stroke();
 }
 
+// Module-level cache of loaded token images, keyed by URL.
+// Entry shape: { img: HTMLImageElement, status: 'loading'|'loaded'|'error' }
+const tokenImageCache = new Map();
+function getTokenImage(url) {
+  let entry = tokenImageCache.get(url);
+  if (entry) return entry;
+  entry = { img: new Image(), status: 'loading' };
+  entry.img.onload = () => { entry.status = 'loaded'; draw(); };
+  entry.img.onerror = () => { entry.status = 'error'; };
+  entry.img.src = url;
+  tokenImageCache.set(url, entry);
+  return entry;
+}
+
 function drawToken(t, size) {
   const cx = (t.x + 0.5) * size;
   const cy = (t.y + 0.5) * size;
   const r = size * 0.42 * (t.size || 1);
 
+  // Look up cached image (if any). Fall back to plain circle until loaded/on error.
+  let imgEntry = null;
+  if (t.image) imgEntry = getTokenImage(t.image);
+  const hasImage = !!(imgEntry && imgEntry.status === 'loaded' && imgEntry.img.complete);
+
   ctx.save();
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.fillStyle = themeColors.paper;
-  ctx.fill();
+  if (!hasImage) {
+    ctx.fillStyle = themeColors.paper;
+    ctx.fill();
+  }
+
+  if (hasImage) {
+    // Clip to the circle and draw the portrait inside it.
+    ctx.save();
+    ctx.clip();
+    // Slight desaturate/contrast tweak so it blends with the pencil aesthetic.
+    const prevFilter = ctx.filter;
+    try { ctx.filter = 'saturate(0.7) contrast(1.05)'; } catch (_) {}
+    ctx.drawImage(imgEntry.img, cx - r, cy - r, r * 2, r * 2);
+    try { ctx.filter = prevFilter || 'none'; } catch (_) {}
+    ctx.restore();
+  }
+
+  // Border stroke (drawn on top of image so it frames the portrait).
   ctx.lineWidth = 2;
   ctx.strokeStyle = t.color || themeColors.ink;
   ctx.stroke();
@@ -785,11 +820,34 @@ function drawToken(t, size) {
     ctx.stroke();
   }
 
-  ctx.fillStyle = themeColors.ink;
   ctx.font = `${Math.floor(size * 0.22)}px Georgia, serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  ctx.fillText(t.name.slice(0, 10), cx, cy);
+  const label = t.name ? t.name.slice(0, 10) : '';
+  if (hasImage) {
+    // Render the name as a small dark-backdrop pill BELOW the token so it
+    // doesn't overlap the portrait. HP bar (if any) will draw below this.
+    const padX = 4, padY = 2;
+    const fontPx = Math.floor(size * 0.18);
+    ctx.font = `${fontPx}px Georgia, serif`;
+    const textW = ctx.measureText(label).width;
+    const pillW = textW + padX * 2;
+    const pillH = fontPx + padY * 2;
+    const px = cx - pillW / 2;
+    const py = cy + r + 3;
+    ctx.fillStyle = 'rgba(20,20,20,0.75)';
+    ctx.fillRect(px, py, pillW, pillH);
+    ctx.strokeStyle = themeColors.ink;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(px, py, pillW, pillH);
+    ctx.fillStyle = '#f5f1e6';
+    ctx.textBaseline = 'top';
+    ctx.fillText(label, cx, py + padY);
+    ctx.textBaseline = 'middle';
+  } else {
+    ctx.fillStyle = themeColors.ink;
+    ctx.fillText(label, cx, cy);
+  }
 
   // HP bar visibility
   const canSeeHp = me.role === 'dm'
@@ -798,7 +856,10 @@ function drawToken(t, size) {
   if (canSeeHp && t.hp_max) {
     const pct = Math.max(0, Math.min(1, t.hp_current / t.hp_max));
     const bw = size * 0.8, bh = 5;
-    const bx = cx - bw/2, by = cy + r + 3;
+    // If an image is present, the name pill is drawn below the token — push
+    // the HP bar further down so they don't overlap.
+    const pillOffset = hasImage ? (Math.floor(size * 0.18) + 6) : 0;
+    const bx = cx - bw/2, by = cy + r + 3 + pillOffset;
     ctx.fillStyle = themeColors.paperDark;
     ctx.fillRect(bx, by, bw, bh);
     ctx.fillStyle = pct > 0.5 ? '#2a5a2a' : pct > 0.25 ? '#8a6a1a' : '#7a2e2e';
