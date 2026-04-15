@@ -20,7 +20,7 @@ function makeTempDb() {
   db.exec(`
     CREATE TABLE maps (
       id INTEGER PRIMARY KEY,
-      campaign_id INTEGER,
+      session_id TEXT,
       name TEXT,
       grid_type TEXT DEFAULT 'square',
       grid_size INTEGER DEFAULT 50,

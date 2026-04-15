@@ -79,7 +79,8 @@ import Database from 'better-sqlite3';
 function mkDb() {
   const db = new Database(':memory:');
   db.exec(`
-    CREATE TABLE campaigns (id INTEGER PRIMARY KEY, light_approval INTEGER DEFAULT 1);
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY, light_approval INTEGER DEFAULT 1);
     CREATE TABLE tokens (
       id INTEGER PRIMARY KEY,
       name TEXT,
@@ -88,7 +89,7 @@ function mkDb() {
       owner_id INTEGER
     );
   `);
-  db.prepare('INSERT INTO campaigns (id, light_approval) VALUES (1, 1)').run();
+  db.prepare('INSERT INTO sessions (id, light_approval) VALUES (1, 1)').run();
   db.prepare("INSERT INTO tokens (id, name, light_type, light_radius, owner_id) VALUES (1, 'Harlen', 'torch', 3, 42)").run();
   return db;
 }
@@ -96,7 +97,7 @@ function mkDb() {
 // Mirrors the server's token:update handler behavior for the light-queue path.
 function applyUpdate(db, role, data) {
   const t = db.prepare('SELECT * FROM tokens WHERE id=?').get(data.id);
-  const campaign = db.prepare('SELECT * FROM campaigns WHERE id=1').get();
+  const campaign = db.prepare('SELECT * FROM sessions WHERE id=1').get();
   let queued = false;
   if (shouldQueueLightChange(role, data, t, campaign)) {
     queued = true;
@@ -125,7 +126,7 @@ test('integration: player light change with approval=1 is not persisted', () => 
 
 test('integration: player light change with approval=0 applies directly', () => {
   const db = mkDb();
-  db.prepare('UPDATE campaigns SET light_approval=0 WHERE id=1').run();
+  db.prepare('UPDATE sessions SET light_approval=0 WHERE id=1').run();
   const res = applyUpdate(db, 'player', { id: 1, light_type: 'bullseye', light_radius: 12 });
   assert.equal(res.queued, false);
   const row = db.prepare('SELECT * FROM tokens WHERE id=1').get();

@@ -20,7 +20,7 @@ function makeTempDb() {
   db.exec(`
     CREATE TABLE maps (
       id INTEGER PRIMARY KEY,
-      campaign_id INTEGER,
+      session_id TEXT,
       name TEXT,
       grid_type TEXT DEFAULT 'square',
       grid_size INTEGER DEFAULT 50,
@@ -79,7 +79,7 @@ function makeTempDb() {
 }
 
 function makeMap(db, w = 20, h = 20) {
-  return db.prepare('INSERT INTO maps (campaign_id, name, width, height, active) VALUES (?,?,?,?,1)')
+  return db.prepare('INSERT INTO maps (session_id, name, width, height, active) VALUES (?,?,?,?,1)')
     .run(1, 'Test', w, h).lastInsertRowid;
 }
 function addToken(db, mapId, opts) {
