@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, cacheBustedImageUrl, lightClipRadiusPx, hasLineOfSight, findCopyOffset, shouldStartPan } from '/lib/logic.js?v={{LIB_VERSION}}';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, cacheBustedImageUrl, lightClipRadiusPx, hasLineOfSight, findCopyOffset, shouldStartPan, isTokenSelected } from '/lib/logic.js?v={{LIB_VERSION}}';
 import { getCreatures, SIZE_MULTIPLIERS, sizeMultiplier } from '/lib/creatures.js?v={{LIB_VERSION}}';
 import { getObjects } from '/lib/objects.js?v={{LIB_VERSION}}';
 import { getSpells } from '/lib/spells.js?v={{LIB_VERSION}}';
@@ -304,7 +304,7 @@ function renderTokenList() {
   for (const t of state.tokens) {
     if (!isDM && !seenIds.has(t.id)) continue;
     const row = document.createElement('div');
-    row.className = 'tk';
+    row.className = 'tk' + (isTokenSelected(t.id, selectedTokenId) ? ' selected' : '');
     const dot = document.createElement('span');
     dot.className = 'dot';
     dot.style.backgroundColor = t.color || '';
@@ -312,7 +312,13 @@ function renderTokenList() {
     name.textContent = t.name || '';
     row.appendChild(dot);
     row.appendChild(name);
-    row.onclick = () => openTokenDialog(t.id);
+    row.onclick = () => {
+      // Sync selection before opening the dialog so the canvas halo
+      // and row highlight stay in lockstep when the dialog closes.
+      selectedTokenId = t.id;
+      draw();
+      openTokenDialog(t.id);
+    };
     list.appendChild(row);
   }
 }
@@ -1232,6 +1238,21 @@ function drawToken(t, size, offset) {
     ctx.lineWidth = 1;
     ctx.strokeRect(bx, by, bw, bh);
   }
+
+  // Selection halo: dashed accent ring drawn on top of the token so
+  // the user sees which token is currently selected (mirrors the
+  // sidebar row highlight). Drawn after the body/border/HP so it isn't
+  // hidden behind any later art passes in this function.
+  if (isTokenSelected(t.id, selectedTokenId)) {
+    ctx.save();
+    ctx.strokeStyle = themeColors.accent || '#c77a4a';
+    ctx.lineWidth = 3;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.arc(cx, cy, r + 4, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+  }
   ctx.restore();
 }
 
@@ -1376,6 +1397,8 @@ canvas.addEventListener('mousedown', (e) => {
       moveBudget: Number.isFinite(chosen.move) ? chosen.move : 6,
     };
     selectedTokenId = chosen.id;
+    renderTokenList();
+    draw();
     return;
   }
   // hit test a door (near nearest edge, within ~1/3 cell)
@@ -1400,6 +1423,13 @@ canvas.addEventListener('mousedown', (e) => {
   // empty space is a no-op. Pan requires an explicit modifier
   // (shift / middle / right) — handled by the shouldStartPan branch
   // above.
+  // Plain click on empty space (no token, no tool mode, no pan) also
+  // deselects any currently selected token so the halo clears.
+  if (selectedTokenId != null) {
+    selectedTokenId = null;
+    draw();
+    renderTokenList();
+  }
 });
 canvas.addEventListener('mousemove', (e) => {
   if (!dragging) {
@@ -1933,6 +1963,16 @@ document.addEventListener('keydown', (e) => {
   else return;
   const facing = ((t.facing || 0) + delta + 8) % 8;
   socket.emit('token:update', { id: t.id, facing });
+});
+
+// Esc deselects the currently selected token. Native <dialog> elements
+// consume Escape themselves, so this only fires when no modal is open.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (selectedTokenId == null) return;
+  selectedTokenId = null;
+  draw();
+  renderTokenList();
 });
 
 // ---- boot ----
