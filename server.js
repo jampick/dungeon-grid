@@ -107,7 +107,8 @@ CREATE TABLE IF NOT EXISTS tokens (
   owner_id INTEGER,
   size INTEGER DEFAULT 1,
   race TEXT,
-  move INTEGER DEFAULT 6
+  move INTEGER DEFAULT 6,
+  aoe TEXT
 );
 CREATE TABLE IF NOT EXISTS players (
   id INTEGER PRIMARY KEY,
@@ -171,6 +172,7 @@ for (const stmt of [
   "ALTER TABLE tokens ADD COLUMN race TEXT",
   "ALTER TABLE tokens ADD COLUMN move INTEGER DEFAULT 6",
   "ALTER TABLE maps ADD COLUMN cell_feet INTEGER DEFAULT 5",
+  "ALTER TABLE tokens ADD COLUMN aoe TEXT",
 ]) { try { db.exec(stmt); } catch {} }
 
 // Light presets / FACING_VEC / computeRevealed now live in lib/logic.js.
@@ -423,13 +425,14 @@ io.on('connection', (socket) => {
   socket.on('token:create', (data) => {
     if (!requireDM(socket) && data.kind !== 'pc') return;
     const map = getActiveMap();
-    const info = db.prepare(`INSERT INTO tokens (map_id,kind,name,image,x,y,hp_current,hp_max,ac,light_radius,light_type,facing,color,owner_id,size,race,move)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    const info = db.prepare(`INSERT INTO tokens (map_id,kind,name,image,x,y,hp_current,hp_max,ac,light_radius,light_type,facing,color,owner_id,size,race,move,aoe)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       map.id, data.kind || 'npc', data.name || '?', data.image || null,
       data.x || 5, data.y || 5, data.hp_current || 10, data.hp_max || 10,
       data.ac || 10, data.light_radius || 0, data.light_type || 'none', data.facing || 0,
       data.color || '#2a2a2a', data.owner_id || null, data.size || 1,
-      data.race || null, Number.isFinite(parseInt(data.move, 10)) ? parseInt(data.move, 10) : 6
+      data.race || null, Number.isFinite(parseInt(data.move, 10)) ? parseInt(data.move, 10) : 6,
+      data.aoe || null
     );
     if (me.role === 'dm') {
       const newId = info.lastInsertRowid;
@@ -469,7 +472,7 @@ io.on('connection', (socket) => {
       delete data.light_radius;
       io.emit('chat:msg', { from: 'system', role: 'dm', text: `${me.name}'s light source change for ${t.name || 'token'} is pending DM approval.`, ts: Date.now() });
     }
-    const fields = ['name','hp_current','hp_max','ac','light_radius','light_type','facing','color','image','size','kind','owner_id','race','move'];
+    const fields = ['name','hp_current','hp_max','ac','light_radius','light_type','facing','color','image','size','kind','owner_id','race','move','aoe'];
     const sets = [], vals = [];
     for (const f of fields) if (f in data) { sets.push(`${f}=?`); vals.push(data[f]); }
     if (!sets.length) { broadcastState(); return; }

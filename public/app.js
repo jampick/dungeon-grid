@@ -5,6 +5,7 @@
 import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText } from '/lib/logic.js?v={{LIB_VERSION}}';
 import { getCreatures, SIZE_MULTIPLIERS, sizeMultiplier } from '/lib/creatures.js?v={{LIB_VERSION}}';
 import { getObjects } from '/lib/objects.js?v={{LIB_VERSION}}';
+import { getSpells } from '/lib/spells.js?v={{LIB_VERSION}}';
 
 // Map a numeric token-size multiplier back to the closest D&D size category
 // label, for repopulating the Size <select> when editing an existing token.
@@ -551,6 +552,54 @@ function ensureBg() {
   }
 }
 
+// Render an area-of-effect overlay (circle/cone/line/square) centered on
+// the token's cell. Cones and lines use the token's `facing` field for
+// orientation. Sizes are in cells; the canvas state is saved/restored
+// internally so callers don't need to.
+function drawAoeOverlay(token, aoe, cellSize) {
+  if (!aoe || !aoe.shape) return;
+  const cx = (token.x + 0.5) * cellSize;
+  const cy = (token.y + 0.5) * cellSize;
+  ctx.save();
+  ctx.fillStyle = aoe.color || 'rgba(255,255,255,0.3)';
+  if (aoe.shape === 'circle') {
+    const r = (Number(aoe.radius) || 0) * cellSize;
+    if (r > 0) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (aoe.shape === 'square') {
+    const side = (Number(aoe.side) || 0) * cellSize;
+    if (side > 0) {
+      const half = side / 2;
+      ctx.fillRect(cx - half, cy - half, side, side);
+    }
+  } else if (aoe.shape === 'cone') {
+    const r = (Number(aoe.radius) || 0) * cellSize;
+    const angDeg = Number(aoe.angle) || 60;
+    if (r > 0) {
+      const facing = FACING_RAD[(token.facing || 0) % 8];
+      const half = (angDeg * Math.PI / 180) / 2;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, r, facing - half, facing + half);
+      ctx.closePath();
+      ctx.fill();
+    }
+  } else if (aoe.shape === 'line') {
+    const len = (Number(aoe.length) || 0) * cellSize;
+    const wid = (Number(aoe.width)  || 1) * cellSize;
+    if (len > 0 && wid > 0) {
+      const facing = FACING_RAD[(token.facing || 0) % 8];
+      ctx.translate(cx, cy);
+      ctx.rotate(facing);
+      ctx.fillRect(0, -wid / 2, len, wid);
+    }
+  }
+  ctx.restore();
+}
+
 function draw() {
   if (!state?.activeMap) return;
   ensureBg();
@@ -848,6 +897,19 @@ function draw() {
       ctx.fillText('?', tx, ty);
       ctx.restore();
     }
+  }
+
+  // AOE overlays for spell effect tokens. Drawn UNDER regular tokens so
+  // monster tokens stay visible inside e.g. a fireball, but ABOVE the
+  // floor/grid/walls so the colored region clearly reads as a magical
+  // effect. Effects obey the same fog rules as other tokens.
+  for (const t of state.tokens) {
+    if (t.kind !== 'effect') continue;
+    if (!tokenVisibleToMe(t)) continue;
+    let aoe = null;
+    try { aoe = t.aoe ? JSON.parse(t.aoe) : null; } catch { aoe = null; }
+    if (!aoe) continue;
+    drawAoeOverlay(t, aoe, size);
   }
 
   // tokens — only those visible to me. Group by cell so stacked tokens
@@ -1490,15 +1552,22 @@ $('ruleset').onchange = () => socket.emit('campaign:settings', { ruleset: $('rul
 // ---- Token dialog ----
 const dlg = $('tokenDialog');
 let pendingPresetImage = null;
+// When a spell preset is picked, we stash its AOE shape config here so the
+// next token:create / token:update payload includes it as JSON.
+let pendingAoe = null;
 $('addToken').onclick = () => openTokenDialog(null);
 let clearImageRequested = false;
 function presetListFor(kind) {
-  // Objects are not ruleset-keyed; creatures are. Returns [] for kinds
-  // that don't have a preset catalog (e.g. 'pc').
+  // Objects are not ruleset-keyed; creatures and spells are. Returns [] for
+  // kinds that don't have a preset catalog (e.g. 'pc').
   if (kind === 'object') return getObjects();
   if (kind === 'monster' || kind === 'npc') {
     const ruleset = state?.campaign?.ruleset || '1e';
     return getCreatures(ruleset, kind);
+  }
+  if (kind === 'effect') {
+    const ruleset = state?.campaign?.ruleset || '1e';
+    return getSpells(ruleset).damage || [];
   }
   return [];
 }
@@ -1516,7 +1585,7 @@ function populatePresetList(kind) {
 }
 function refreshPresetRow() {
   const kind = $('tkKind').value;
-  const show = (kind === 'monster' || kind === 'npc' || kind === 'object');
+  const show = (kind === 'monster' || kind === 'npc' || kind === 'object' || kind === 'effect');
   $('tkPresetRow').style.display = show ? '' : 'none';
   populatePresetList(kind);
 }
@@ -1569,6 +1638,12 @@ function openTokenDialog(id) {
   if ($('tkSize')) $('tkSize').value = categoryForMultiplier(t?.size ?? 1);
   $('tkDelete').style.display = id && auth.role === 'dm' ? '' : 'none';
   resetTokenImagePreview(t?.image || '');
+  // Re-hydrate any stored AOE shape config so an existing effect token
+  // round-trips its shape if the user edits it without picking a preset.
+  pendingAoe = null;
+  if (t && t.kind === 'effect' && t.aoe) {
+    try { pendingAoe = JSON.parse(t.aoe); } catch { pendingAoe = null; }
+  }
   refreshPresetRow();
   dlg.showModal();
 }
@@ -1589,10 +1664,23 @@ $('tkPreset').onchange = () => {
   const preset = list.find(c => c.id === id);
   if (!preset) return;
   $('tkName').value = preset.name;
-  $('tkHp').value = preset.hp;
-  $('tkHpMax').value = preset.hp;
-  $('tkAc').value = preset.ac;
-  $('tkColor').value = preset.color;
+  if (kind === 'effect') {
+    // Spell presets carry shape geometry instead of HP/AC. Stash the
+    // AOE config so the next save persists it as JSON on the token.
+    pendingAoe = { shape: preset.shape, color: preset.color };
+    if (preset.radius != null) pendingAoe.radius = preset.radius;
+    if (preset.angle  != null) pendingAoe.angle  = preset.angle;
+    if (preset.length != null) pendingAoe.length = preset.length;
+    if (preset.width  != null) pendingAoe.width  = preset.width;
+    if (preset.side   != null) pendingAoe.side   = preset.side;
+  } else {
+    $('tkHp').value = preset.hp;
+    $('tkHpMax').value = preset.hp;
+    $('tkAc').value = preset.ac;
+  }
+  if (preset.color && typeof preset.color === 'string' && preset.color.startsWith('#')) {
+    $('tkColor').value = preset.color;
+  }
   pendingPresetImage = preset.image;
   clearImageRequested = false;
   setPreviewSrc($('tkImgPreview'), preset.image);
@@ -1649,6 +1737,9 @@ $('tkSave').onclick = async () => {
   } else if (pendingPresetImage) {
     data.image = pendingPresetImage;
   }
+  if (data.kind === 'effect' && pendingAoe) {
+    data.aoe = JSON.stringify(pendingAoe);
+  }
   if (editingTokenId) {
     data.id = editingTokenId;
     socket.emit('token:update', data);
@@ -1656,6 +1747,7 @@ $('tkSave').onclick = async () => {
     socket.emit('token:create', data);
   }
   pendingPresetImage = null;
+  pendingAoe = null;
   dlg.close();
 };
 $('tkDelete').onclick = () => {
