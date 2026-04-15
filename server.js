@@ -9,7 +9,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { LIGHT_PRESETS, FACING_VEC, computeRevealed, rollDice, recomputeFog as recomputeFogLogic,
   canClearChat, createUndoStack, snapshotToken, restoreTokenRow, snapshotWalls, restoreWalls, snapshotMap, snapshotFog,
-  isReachable, shouldQueueLightChange, loginDm, loginPlayer } from './lib/logic.js';
+  isReachable, shouldQueueLightChange, loginDm, loginPlayer, generateRandomDungeon } from './lib/logic.js';
 import { listMaps, createMap as createMapDb, renameMap as renameMapDb, activateMap as activateMapDb, duplicateMap as duplicateMapDb, deleteMap as deleteMapDb } from './lib/maps.js';
 import { getDeploymentInfo, TRIGGER_DIR, buildTriggerFilename } from './lib/deployment.js';
 
@@ -613,6 +613,35 @@ io.on('connection', (socket) => {
     db.prepare('DELETE FROM walls WHERE map_id=?').run(map.id);
     io.emit('walls:state', []);
     recomputeFog(map.id);
+    broadcastState();
+  });
+
+  socket.on('map:generate-random', () => {
+    if (!requireDM(socket)) return;
+    const map = getActiveMap();
+    if (!map) return;
+    const prevWalls = snapshotWalls(db, map.id);
+    const { walls: gen } = generateRandomDungeon(map.width, map.height);
+    const tx = db.transaction(() => {
+      db.prepare('DELETE FROM walls WHERE map_id=?').run(map.id);
+      const ins = db.prepare('INSERT INTO walls (map_id, cx, cy, side, kind, open) VALUES (?,?,?,?,?,?)');
+      for (const w of gen) {
+        ins.run(map.id, w.cx, w.cy, w.side, w.kind || 'wall', w.open ? 1 : 0);
+      }
+    });
+    tx();
+    pushUndo({
+      kind: 'map:generate-random',
+      label: 'Generate random map',
+      inverse: () => {
+        restoreWalls(db, map.id, prevWalls);
+        recomputeFog(map.id);
+        io.emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
+        broadcastState();
+      },
+    });
+    recomputeFog(map.id);
+    io.emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
     broadcastState();
   });
 
