@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText } from '/lib/logic.js?v={{LIB_VERSION}}';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, hasLineOfSight } from '/lib/logic.js?v={{LIB_VERSION}}';
 import { getCreatures, SIZE_MULTIPLIERS, sizeMultiplier } from '/lib/creatures.js?v={{LIB_VERSION}}';
 import { getObjects } from '/lib/objects.js?v={{LIB_VERSION}}';
 import { getSpells } from '/lib/spells.js?v={{LIB_VERSION}}';
@@ -635,6 +635,20 @@ function draw() {
   const isDM = auth.role === 'dm';
   const cellVisible = (x, y) => !displayFog.has(`${x},${y}`);
   const tokenVisibleToMe = (t) => isDM || (t.owner_id && t.owner_id === me.playerId) || cellVisible(t.x, t.y);
+  // Effect tokens (spell AOEs: fireball, cone of cold, lightning bolt, ...)
+  // are bright explosive magical events. A player should see one if any
+  // party member has a clear line of sight to the effect's origin, even if
+  // the viewer's own cell is dark. Walls and closed doors still block.
+  // DMs always see all effects.
+  const effectVisibleToMe = (t) => {
+    if (isDM) return true;
+    for (const p of state.tokens) {
+      const isParty = p.kind === 'pc' || p.owner_id != null;
+      if (!isParty) continue;
+      if (hasLineOfSight(p.x, p.y, t.x, t.y, walls)) return true;
+    }
+    return false;
+  };
 
   // fog overlay — rounded-light version (two-pass per-light clip).
   //
@@ -905,7 +919,9 @@ function draw() {
   // effect. Effects obey the same fog rules as other tokens.
   for (const t of state.tokens) {
     if (t.kind !== 'effect') continue;
-    if (!tokenVisibleToMe(t)) continue;
+    // Effects use LOS-based visibility, not the lit-cell rule that
+    // tokenVisibleToMe applies — see effectVisibleToMe above.
+    if (!effectVisibleToMe(t)) continue;
     let aoe = null;
     try { aoe = t.aoe ? JSON.parse(t.aoe) : null; } catch { aoe = null; }
     if (!aoe) continue;
@@ -917,7 +933,11 @@ function draw() {
   {
     const byCell = new Map();
     for (const t of state.tokens) {
-      if (!tokenVisibleToMe(t)) continue;
+      // Effects use LOS visibility (see effectVisibleToMe); everything else
+      // uses the lit-cell rule. Keeps the stacked-token marker for an effect
+      // in sync with whether its AOE overlay is shown.
+      const visible = t.kind === 'effect' ? effectVisibleToMe(t) : tokenVisibleToMe(t);
+      if (!visible) continue;
       const key = `${t.x},${t.y}`;
       let arr = byCell.get(key);
       if (!arr) { arr = []; byCell.set(key, arr); }
