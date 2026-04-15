@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { computeLightGeometry, LIGHT_PRESETS } from '../lib/logic.js';
+import { computeLightGeometry, LIGHT_PRESETS, lightClipRadiusPx } from '../lib/logic.js';
 
 const SIZE = 32;
 
@@ -10,7 +10,9 @@ test('computeLightGeometry: torch returns circle, no cone', () => {
   assert.ok(g);
   assert.equal(g.cx, (5 + 0.5) * SIZE);
   assert.equal(g.cy, (5 + 0.5) * SIZE);
-  assert.equal(g.radius, 3 * SIZE);
+  // Clip radius extends half a cell past the nominal cell count so that
+  // cardinal cells at max distance render fully lit instead of half-sliced.
+  assert.equal(g.radius, 3.5 * SIZE);
   assert.equal(g.cone, null);
 });
 
@@ -23,7 +25,7 @@ test('computeLightGeometry: none / zero radius returns null', () => {
 test('computeLightGeometry: light_radius override wins over preset', () => {
   const t = { x: 0, y: 0, light_type: 'torch', light_radius: 10 };
   const g = computeLightGeometry(t, LIGHT_PRESETS.torch, SIZE);
-  assert.equal(g.radius, 10 * SIZE);
+  assert.equal(g.radius, 10.5 * SIZE);
 });
 
 test('computeLightGeometry: bullseye facing east → cone around 0 rad', () => {
@@ -33,7 +35,26 @@ test('computeLightGeometry: bullseye facing east → cone around 0 rad', () => {
   const half = Math.PI / 3;
   assert.equal(g.cone.startAngle, 0 - half);
   assert.equal(g.cone.endAngle, 0 + half);
-  assert.equal(g.radius, 12 * SIZE);
+  assert.equal(g.radius, 12.5 * SIZE);
+});
+
+test('lightClipRadiusPx: adds half a cell so cardinal cells render full', () => {
+  // 3-cell torch @ 50 px/cell → 3.5 * 50 = 175 px clip radius.
+  assert.equal(lightClipRadiusPx(3, 50), 3.5 * 50);
+  assert.equal(lightClipRadiusPx(1, 32), 1.5 * 32);
+  assert.equal(lightClipRadiusPx(12, 32), 12.5 * 32);
+});
+
+test('lightClipRadiusPx: returns 0 for non-positive inputs', () => {
+  assert.equal(lightClipRadiusPx(0, 50), 0);
+  assert.equal(lightClipRadiusPx(3, 0), 0);
+  assert.equal(lightClipRadiusPx(-1, 50), 0);
+});
+
+test('computeLightGeometry: radius matches lightClipRadiusPx helper', () => {
+  const t = { x: 0, y: 0, light_type: 'torch', light_radius: 0 };
+  const g = computeLightGeometry(t, LIGHT_PRESETS.torch, SIZE);
+  assert.equal(g.radius, lightClipRadiusPx(LIGHT_PRESETS.torch.radius, SIZE));
 });
 
 test('computeLightGeometry: bullseye facing north → cone around -PI/2', () => {

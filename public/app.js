@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, cacheBustedImageUrl } from '/lib/logic.js?v={{LIB_VERSION}}';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, cacheBustedImageUrl, lightClipRadiusPx } from '/lib/logic.js?v={{LIB_VERSION}}';
 import { getCreatures, SIZE_MULTIPLIERS, sizeMultiplier } from '/lib/creatures.js?v={{LIB_VERSION}}';
 import { getObjects } from '/lib/objects.js?v={{LIB_VERSION}}';
 import { getSpells } from '/lib/spells.js?v={{LIB_VERSION}}';
@@ -700,7 +700,12 @@ function draw() {
     const rCells = t.light_radius > 0 ? t.light_radius : preset.radius;
     if (rCells <= 0) return null;
     const cx = (t.x + 0.5) * size, cy = (t.y + 0.5) * size;
-    const rPx = rCells * size;
+    // Visual clip radius extends half a cell past the nominal cell count so
+    // cardinal-direction cells at the edge of the lit BFS render fully (their
+    // outer edge falls inside the circle instead of halfway across them).
+    // The server's computeRevealed BFS is unchanged and remains the source of
+    // truth for which cells are lit; this only affects the client-side clip.
+    const rPx = lightClipRadiusPx(rCells, size);
     // Visible cells inside the light's bounding box, trimmed to map bounds.
     const minX = Math.max(0, t.x - rCells - 1);
     const maxX = Math.min(m.width  - 1, t.x + rCells + 1);
