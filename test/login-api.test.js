@@ -10,20 +10,20 @@ function makeTempDb() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'dgrid-login-'));
   const db = new Database(path.join(dir, 'grid.db'));
   db.exec(`
-    CREATE TABLE campaigns (
-      id INTEGER PRIMARY KEY,
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       created_at INTEGER
     );
     CREATE TABLE players (
       id INTEGER PRIMARY KEY,
-      campaign_id INTEGER,
+      session_id TEXT,
       name TEXT,
       token TEXT UNIQUE,
       role TEXT DEFAULT 'player'
     );
   `);
-  db.prepare('INSERT INTO campaigns (name, created_at) VALUES (?, ?)').run('Test', Date.now());
+  db.prepare("INSERT INTO sessions (id, name, created_at) VALUES ('test', ?, ?)").run('Test', Date.now());
   return db;
 }
 
@@ -37,7 +37,7 @@ const DM_PW = 'secret';
 
 test('loginDm: correct password returns ok with dm role and a token', () => {
   const db = makeTempDb();
-  const r = loginDm(db, { password: DM_PW, name: 'Gary' }, {
+  const r = loginDm(db, { session_id: 'test', password: DM_PW, name: 'Gary' }, {
     dmPassword: DM_PW,
     newToken: makeTokenFactory('dm'),
   });
@@ -50,7 +50,7 @@ test('loginDm: correct password returns ok with dm role and a token', () => {
 
 test('loginDm: wrong password returns ok:false with 401', () => {
   const db = makeTempDb();
-  const r = loginDm(db, { password: 'nope' }, {
+  const r = loginDm(db, { session_id: 'test', password: 'nope' }, {
     dmPassword: DM_PW,
     newToken: makeTokenFactory(),
   });
@@ -61,7 +61,7 @@ test('loginDm: wrong password returns ok:false with 401', () => {
 
 test('loginDm: missing password returns ok:false', () => {
   const db = makeTempDb();
-  const r = loginDm(db, {}, {
+  const r = loginDm(db, { session_id: 'test' }, {
     dmPassword: DM_PW,
     newToken: makeTokenFactory(),
   });
@@ -72,8 +72,8 @@ test('loginDm: missing password returns ok:false', () => {
 test('loginDm: two successful logins reuse the same dm row', () => {
   const db = makeTempDb();
   const deps = { dmPassword: DM_PW, newToken: makeTokenFactory('dm') };
-  const a = loginDm(db, { password: DM_PW, name: 'Gary' }, deps);
-  const b = loginDm(db, { password: DM_PW, name: 'Somebody Else' }, deps);
+  const a = loginDm(db, { session_id: 'test', password: DM_PW, name: 'Gary' }, deps);
+  const b = loginDm(db, { session_id: 'test', password: DM_PW, name: 'Somebody Else' }, deps);
   assert.equal(a.ok, true);
   assert.equal(b.ok, true);
   assert.equal(a.playerId, b.playerId, 'DM row should be reused');
@@ -85,7 +85,7 @@ test('loginDm: two successful logins reuse the same dm row', () => {
 
 test('loginPlayer: new name creates a player row with role=player and a token', () => {
   const db = makeTempDb();
-  const r = loginPlayer(db, { name: 'Alice' }, { newToken: makeTokenFactory('p') });
+  const r = loginPlayer(db, { session_id: 'test', name: 'Alice' }, { newToken: makeTokenFactory('p') });
   assert.equal(r.ok, true);
   assert.equal(r.role, 'player');
   assert.equal(r.name, 'Alice');
@@ -95,7 +95,7 @@ test('loginPlayer: new name creates a player row with role=player and a token', 
 
 test('loginPlayer: missing name returns ok:false with 400', () => {
   const db = makeTempDb();
-  const r = loginPlayer(db, {}, { newToken: makeTokenFactory() });
+  const r = loginPlayer(db, { session_id: 'test' }, { newToken: makeTokenFactory() });
   assert.equal(r.ok, false);
   assert.equal(r.status, 400);
   assert.match(r.error, /name/i);
@@ -104,8 +104,8 @@ test('loginPlayer: missing name returns ok:false with 400', () => {
 test('loginPlayer: two logins with same name reuse the existing row', () => {
   const db = makeTempDb();
   const deps = { newToken: makeTokenFactory('p') };
-  const a = loginPlayer(db, { name: 'Alice' }, deps);
-  const b = loginPlayer(db, { name: 'Alice' }, deps);
+  const a = loginPlayer(db, { session_id: 'test', name: 'Alice' }, deps);
+  const b = loginPlayer(db, { session_id: 'test', name: 'Alice' }, deps);
   assert.equal(a.ok, true);
   assert.equal(b.ok, true);
   assert.equal(a.playerId, b.playerId);

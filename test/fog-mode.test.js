@@ -12,14 +12,14 @@ function makeTempDb() {
   const db = new Database(path.join(dir, 'grid.db'));
   db.pragma('journal_mode = WAL');
   db.exec(`
-    CREATE TABLE campaigns (
-      id INTEGER PRIMARY KEY,
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       created_at INTEGER
     );
     CREATE TABLE maps (
       id INTEGER PRIMARY KEY,
-      campaign_id INTEGER,
+      session_id TEXT,
       name TEXT,
       grid_type TEXT DEFAULT 'square',
       grid_size INTEGER DEFAULT 50,
@@ -74,8 +74,8 @@ function makeTempDb() {
       PRIMARY KEY (map_id, cx, cy, token_id)
     );
   `);
-  const info = db.prepare('INSERT INTO campaigns (name, created_at) VALUES (?,?)').run('Test', Date.now());
-  return { db, campaignId: info.lastInsertRowid };
+  db.prepare("INSERT INTO sessions (id, name, created_at) VALUES ('test', ?, ?)").run('Test', Date.now());
+  return { db, sessionId: 'test' };
 }
 
 function addPcTorch(db, mapId) {
@@ -84,21 +84,21 @@ function addPcTorch(db, mapId) {
 }
 
 test('createMap with fog_mode=outdoor persists the value', () => {
-  const { db, campaignId } = makeTempDb();
-  const id = createMap(db, campaignId, { name: 'Field', fog_mode: 'outdoor', width: 10, height: 10 });
+  const { db, sessionId } = makeTempDb();
+  const id = createMap(db, sessionId, { name: 'Field', fog_mode: 'outdoor', width: 10, height: 10 });
   const row = getMap(db, id);
   assert.equal(row.fog_mode, 'outdoor');
 });
 
 test('createMap defaults fog_mode to dungeon', () => {
-  const { db, campaignId } = makeTempDb();
-  const id = createMap(db, campaignId, { name: 'Crypt', width: 10, height: 10 });
+  const { db, sessionId } = makeTempDb();
+  const id = createMap(db, sessionId, { name: 'Crypt', width: 10, height: 10 });
   assert.equal(getMap(db, id).fog_mode, 'dungeon');
 });
 
 test('recomputeFog on dungeon map with PC+torch returns non-empty fog', () => {
-  const { db, campaignId } = makeTempDb();
-  const id = createMap(db, campaignId, { name: 'D', fog_mode: 'dungeon', width: 20, height: 20 });
+  const { db, sessionId } = makeTempDb();
+  const id = createMap(db, sessionId, { name: 'D', fog_mode: 'dungeon', width: 20, height: 20 });
   addPcTorch(db, id);
   const fog = recomputeFog(db, () => {}, id);
   assert.ok(Array.isArray(fog));
@@ -109,8 +109,8 @@ test('recomputeFog on dungeon map with PC+torch returns non-empty fog', () => {
 });
 
 test('recomputeFog on outdoor map returns empty fog regardless of lights', () => {
-  const { db, campaignId } = makeTempDb();
-  const id = createMap(db, campaignId, { name: 'Field', fog_mode: 'outdoor', width: 20, height: 20 });
+  const { db, sessionId } = makeTempDb();
+  const id = createMap(db, sessionId, { name: 'Field', fog_mode: 'outdoor', width: 20, height: 20 });
   addPcTorch(db, id);
   const fog = recomputeFog(db, () => {}, id);
   assert.deepEqual(fog, []);
@@ -125,16 +125,16 @@ test('recomputeFog on outdoor map returns empty fog regardless of lights', () =>
 });
 
 test('recomputeFog on none map returns empty fog', () => {
-  const { db, campaignId } = makeTempDb();
-  const id = createMap(db, campaignId, { name: 'Open', fog_mode: 'none', width: 15, height: 15 });
+  const { db, sessionId } = makeTempDb();
+  const id = createMap(db, sessionId, { name: 'Open', fog_mode: 'none', width: 15, height: 15 });
   addPcTorch(db, id);
   const fog = recomputeFog(db, () => {}, id);
   assert.deepEqual(fog, []);
 });
 
 test('recomputeFog emits fog:state with empty array for outdoor maps', () => {
-  const { db, campaignId } = makeTempDb();
-  const id = createMap(db, campaignId, { name: 'Field', fog_mode: 'outdoor', width: 10, height: 10 });
+  const { db, sessionId } = makeTempDb();
+  const id = createMap(db, sessionId, { name: 'Field', fog_mode: 'outdoor', width: 10, height: 10 });
   addPcTorch(db, id);
   const events = [];
   recomputeFog(db, (ev, payload) => events.push({ ev, payload }), id);
@@ -144,8 +144,8 @@ test('recomputeFog emits fog:state with empty array for outdoor maps', () => {
 });
 
 test('toggling dungeon -> outdoor clears fog; outdoor -> dungeon restores it', () => {
-  const { db, campaignId } = makeTempDb();
-  const id = createMap(db, campaignId, { name: 'M', fog_mode: 'dungeon', width: 20, height: 20 });
+  const { db, sessionId } = makeTempDb();
+  const id = createMap(db, sessionId, { name: 'M', fog_mode: 'dungeon', width: 20, height: 20 });
   addPcTorch(db, id);
 
   // Dungeon: fog has entries.

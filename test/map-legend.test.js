@@ -15,14 +15,14 @@ function makeTempDb() {
   const db = new Database(path.join(dir, 'grid.db'));
   db.pragma('journal_mode = WAL');
   db.exec(`
-    CREATE TABLE campaigns (
-      id INTEGER PRIMARY KEY,
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       created_at INTEGER
     );
     CREATE TABLE maps (
       id INTEGER PRIMARY KEY,
-      campaign_id INTEGER,
+      session_id TEXT,
       name TEXT,
       grid_type TEXT DEFAULT 'square',
       grid_size INTEGER DEFAULT 50,
@@ -35,8 +35,8 @@ function makeTempDb() {
   // Mirror the server.js migration block.
   try { db.exec("ALTER TABLE maps ADD COLUMN cell_feet INTEGER DEFAULT 5"); } catch {}
   try { db.exec("ALTER TABLE maps ADD COLUMN fog_mode TEXT DEFAULT 'dungeon'"); } catch {}
-  const info = db.prepare('INSERT INTO campaigns (name, created_at) VALUES (?, ?)').run('C', Date.now());
-  return { db, campaignId: info.lastInsertRowid };
+  db.prepare("INSERT INTO sessions (id, name, created_at) VALUES ('test', ?, ?)").run('C', Date.now());
+  return { db, sessionId: 'test' };
 }
 
 test('migration adds cell_feet column to legacy maps table', () => {
@@ -46,22 +46,22 @@ test('migration adds cell_feet column to legacy maps table', () => {
 });
 
 test('createMap defaults cell_feet to 5 when unspecified', () => {
-  const { db, campaignId } = makeTempDb();
-  const id = createMap(db, campaignId, { name: 'M' });
+  const { db, sessionId } = makeTempDb();
+  const id = createMap(db, sessionId, { name: 'M' });
   const row = db.prepare('SELECT cell_feet FROM maps WHERE id=?').get(id);
   assert.equal(row.cell_feet, 5);
 });
 
 test('createMap honors explicit cell_feet value', () => {
-  const { db, campaignId } = makeTempDb();
-  const id = createMap(db, campaignId, { name: 'M', cell_feet: 10 });
+  const { db, sessionId } = makeTempDb();
+  const id = createMap(db, sessionId, { name: 'M', cell_feet: 10 });
   const row = db.prepare('SELECT cell_feet FROM maps WHERE id=?').get(id);
   assert.equal(row.cell_feet, 10);
 });
 
 test('UPDATE on cell_feet persists', () => {
-  const { db, campaignId } = makeTempDb();
-  const id = createMap(db, campaignId, { name: 'M' });
+  const { db, sessionId } = makeTempDb();
+  const id = createMap(db, sessionId, { name: 'M' });
   db.prepare('UPDATE maps SET cell_feet=? WHERE id=?').run(20, id);
   const row = db.prepare('SELECT cell_feet FROM maps WHERE id=?').get(id);
   assert.equal(row.cell_feet, 20);

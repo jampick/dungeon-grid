@@ -19,14 +19,14 @@ function makeTempDb() {
   const db = new Database(path.join(dir, 'grid.db'));
   db.pragma('journal_mode = WAL');
   db.exec(`
-    CREATE TABLE campaigns (
-      id INTEGER PRIMARY KEY,
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       created_at INTEGER
     );
     CREATE TABLE maps (
       id INTEGER PRIMARY KEY,
-      campaign_id INTEGER,
+      session_id TEXT,
       name TEXT,
       grid_type TEXT DEFAULT 'square',
       grid_size INTEGER DEFAULT 50,
@@ -67,13 +67,13 @@ function makeTempDb() {
       PRIMARY KEY (map_id, cx, cy, side)
     );
   `);
-  const info = db.prepare('INSERT INTO campaigns (name, created_at) VALUES (?, ?)').run('Test', Date.now());
-  return { db, campaignId: info.lastInsertRowid };
+  db.prepare("INSERT INTO sessions (id, name, created_at) VALUES ('test', ?, ?)").run('Test', Date.now());
+  return { db, sessionId: 'test' };
 }
 
-function seedMapWithContent(db, campaignId, { tokens = 0, walls = 0, active = 0, name = 'Seed' } = {}) {
-  const info = db.prepare('INSERT INTO maps (campaign_id, name, width, height, active) VALUES (?,?,?,?,?)')
-    .run(campaignId, name, 20, 20, active);
+function seedMapWithContent(db, sessionId, { tokens = 0, walls = 0, active = 0, name = 'Seed' } = {}) {
+  const info = db.prepare('INSERT INTO maps (session_id, name, width, height, active) VALUES (?,?,?,?,?)')
+    .run(sessionId, name, 20, 20, active);
   const mapId = info.lastInsertRowid;
   for (let i = 0; i < tokens; i++) {
     db.prepare('INSERT INTO tokens (map_id, kind, name, x, y, hp_current, hp_max, ac, color) VALUES (?,?,?,?,?,?,?,?,?)')
@@ -88,8 +88,8 @@ function seedMapWithContent(db, campaignId, { tokens = 0, walls = 0, active = 0,
 }
 
 test('duplicateMap copies tokens and walls to the new map_id', () => {
-  const { db, campaignId } = makeTempDb();
-  const srcId = seedMapWithContent(db, campaignId, { tokens: 2, walls: 3, active: 1, name: 'Source' });
+  const { db, sessionId } = makeTempDb();
+  const srcId = seedMapWithContent(db, sessionId, { tokens: 2, walls: 3, active: 1, name: 'Source' });
 
   const newId = duplicateMap(db, srcId);
   assert.ok(newId && newId !== srcId, 'returns a new id');
@@ -115,8 +115,8 @@ test('duplicateMap copies tokens and walls to the new map_id', () => {
 });
 
 test('deleteMap refuses to delete the last remaining map', () => {
-  const { db, campaignId } = makeTempDb();
-  const onlyId = createMap(db, campaignId, { name: 'Only' });
+  const { db, sessionId } = makeTempDb();
+  const onlyId = createMap(db, sessionId, { name: 'Only' });
   activateMap(db, onlyId);
 
   assert.throws(() => deleteMap(db, onlyId), /last map/);
@@ -125,9 +125,9 @@ test('deleteMap refuses to delete the last remaining map', () => {
 });
 
 test('deleteMap removes children and reactivates another map when deleting the active one', () => {
-  const { db, campaignId } = makeTempDb();
-  const aId = seedMapWithContent(db, campaignId, { tokens: 1, walls: 1, active: 1, name: 'A' });
-  const bId = createMap(db, campaignId, { name: 'B' });
+  const { db, sessionId } = makeTempDb();
+  const aId = seedMapWithContent(db, sessionId, { tokens: 1, walls: 1, active: 1, name: 'A' });
+  const bId = createMap(db, sessionId, { name: 'B' });
 
   deleteMap(db, aId);
   assert.equal(getMap(db, aId), undefined);
@@ -138,8 +138,8 @@ test('deleteMap removes children and reactivates another map when deleting the a
 });
 
 test('renameMap persists the new name', () => {
-  const { db, campaignId } = makeTempDb();
-  const id = createMap(db, campaignId, { name: 'Old' });
+  const { db, sessionId } = makeTempDb();
+  const id = createMap(db, sessionId, { name: 'Old' });
   const ok = renameMap(db, id, 'Shiny New Name');
   assert.equal(ok, true);
   assert.equal(getMap(db, id).name, 'Shiny New Name');
@@ -150,14 +150,14 @@ test('renameMap persists the new name', () => {
 });
 
 test('activateMap sets only the target map active and clears others', () => {
-  const { db, campaignId } = makeTempDb();
-  const a = createMap(db, campaignId, { name: 'A' });
-  const b = createMap(db, campaignId, { name: 'B' });
-  const c = createMap(db, campaignId, { name: 'C' });
+  const { db, sessionId } = makeTempDb();
+  const a = createMap(db, sessionId, { name: 'A' });
+  const b = createMap(db, sessionId, { name: 'B' });
+  const c = createMap(db, sessionId, { name: 'C' });
   activateMap(db, a);
   activateMap(db, c);
 
-  const rows = listMaps(db, campaignId);
+  const rows = listMaps(db, sessionId);
   const byId = Object.fromEntries(rows.map(r => [r.id, r]));
   assert.equal(byId[a].active, 0);
   assert.equal(byId[b].active, 0);

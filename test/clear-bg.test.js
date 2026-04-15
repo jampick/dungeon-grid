@@ -13,7 +13,7 @@ function makeTempDb() {
   db.exec(`
     CREATE TABLE maps (
       id INTEGER PRIMARY KEY,
-      campaign_id INTEGER,
+      session_id TEXT,
       name TEXT,
       grid_type TEXT DEFAULT 'square',
       grid_size INTEGER DEFAULT 50,
@@ -29,7 +29,7 @@ function makeTempDb() {
 test('UPDATE maps SET background=NULL clears the background column', () => {
   const db = makeTempDb();
   const info = db.prepare(
-    'INSERT INTO maps (campaign_id, name, background) VALUES (?,?,?)'
+    'INSERT INTO maps (session_id, name, background) VALUES (?,?,?)'
   ).run(1, 'M', '/uploads/bg.png');
   const id = info.lastInsertRowid;
   assert.equal(db.prepare('SELECT background FROM maps WHERE id=?').get(id).background, '/uploads/bg.png');
@@ -42,7 +42,7 @@ test('UPDATE maps SET background=NULL clears the background column', () => {
 test('snapshotMap captures background so undo can restore it', () => {
   const db = makeTempDb();
   const info = db.prepare(
-    'INSERT INTO maps (campaign_id, name, background) VALUES (?,?,?)'
+    'INSERT INTO maps (session_id, name, background) VALUES (?,?,?)'
   ).run(1, 'M', '/uploads/original.png');
   const id = info.lastInsertRowid;
 

@@ -15,14 +15,14 @@ function makeTempDb() {
   const db = new Database(path.join(dir, 'grid.db'));
   db.pragma('journal_mode = WAL');
   db.exec(`
-    CREATE TABLE campaigns (
-      id INTEGER PRIMARY KEY,
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       created_at INTEGER
     );
     CREATE TABLE maps (
       id INTEGER PRIMARY KEY,
-      campaign_id INTEGER,
+      session_id TEXT,
       name TEXT,
       grid_type TEXT DEFAULT 'square',
       grid_size INTEGER DEFAULT 50,
@@ -59,8 +59,8 @@ function makeTempDb() {
       PRIMARY KEY (map_id, cx, cy, side)
     );
   `);
-  const info = db.prepare('INSERT INTO campaigns (name, created_at) VALUES (?, ?)').run('Test', Date.now());
-  return { db, campaignId: info.lastInsertRowid };
+  db.prepare("INSERT INTO sessions (id, name, created_at) VALUES ('test', ?, ?)").run('Test', Date.now());
+  return { db, sessionId: 'test' };
 }
 
 function insertToken(db, row) {
@@ -77,9 +77,9 @@ function insertToken(db, row) {
 }
 
 test('performTravel moves an owned token to the linked map & destination cell', () => {
-  const { db, campaignId } = makeTempDb();
-  const map1 = createMap(db, campaignId, { name: 'Level 1' });
-  const map2 = createMap(db, campaignId, { name: 'Level 2' });
+  const { db, sessionId } = makeTempDb();
+  const map1 = createMap(db, sessionId, { name: 'Level 1' });
+  const map2 = createMap(db, sessionId, { name: 'Level 2' });
   const stairsId = insertToken(db, { map_id: map1, kind: 'object', name: 'Stairs',
     x: 3, y: 3, link_map_id: map2, link_x: 7, link_y: 8 });
   const playerId = 42;
@@ -105,8 +105,8 @@ test('performTravel moves an owned token to the linked map & destination cell', 
 });
 
 test('performTravel with no link_map_id is a no-op', () => {
-  const { db, campaignId } = makeTempDb();
-  const map1 = createMap(db, campaignId, { name: 'Level 1' });
+  const { db, sessionId } = makeTempDb();
+  const map1 = createMap(db, sessionId, { name: 'Level 1' });
   const propId = insertToken(db, { map_id: map1, kind: 'object', name: 'Visual Stairs', x: 4, y: 4 });
   insertToken(db, { map_id: map1, kind: 'pc', name: 'Hero', owner_id: 1 });
 
@@ -120,8 +120,8 @@ test('performTravel with no link_map_id is a no-op', () => {
 });
 
 test('performTravel with a stale link_map_id (target map deleted) is a no-op', () => {
-  const { db, campaignId } = makeTempDb();
-  const map1 = createMap(db, campaignId, { name: 'Level 1' });
+  const { db, sessionId } = makeTempDb();
+  const map1 = createMap(db, sessionId, { name: 'Level 1' });
   // Manually insert a stairs token pointing at a bogus map id.
   const stairsId = insertToken(db, { map_id: map1, kind: 'object', name: 'Broken',
     x: 1, y: 1, link_map_id: 9999, link_x: 0, link_y: 0 });
@@ -133,9 +133,9 @@ test('performTravel with a stale link_map_id (target map deleted) is a no-op', (
 });
 
 test('performTravel with no owned token on source map is a no-op', () => {
-  const { db, campaignId } = makeTempDb();
-  const map1 = createMap(db, campaignId, { name: 'L1' });
-  const map2 = createMap(db, campaignId, { name: 'L2' });
+  const { db, sessionId } = makeTempDb();
+  const map1 = createMap(db, sessionId, { name: 'L1' });
+  const map2 = createMap(db, sessionId, { name: 'L2' });
   const stairsId = insertToken(db, { map_id: map1, kind: 'object',
     link_map_id: map2, link_x: 1, link_y: 1 });
   const r = performTravel(db, 99, stairsId);
@@ -144,9 +144,9 @@ test('performTravel with no owned token on source map is a no-op', () => {
 });
 
 test('deleteMap cascades link_map_id to NULL on surviving tokens', () => {
-  const { db, campaignId } = makeTempDb();
-  const map1 = createMap(db, campaignId, { name: 'L1' });
-  const map2 = createMap(db, campaignId, { name: 'L2' });
+  const { db, sessionId } = makeTempDb();
+  const map1 = createMap(db, sessionId, { name: 'L1' });
+  const map2 = createMap(db, sessionId, { name: 'L2' });
   // stairs on map1 -> map2
   const stairsId = insertToken(db, { map_id: map1, kind: 'object', name: 'Stairs',
     link_map_id: map2, link_x: 5, link_y: 5 });
@@ -159,10 +159,10 @@ test('deleteMap cascades link_map_id to NULL on surviving tokens', () => {
 });
 
 test('nullLinksToMap clears all dangling links to a given map', () => {
-  const { db, campaignId } = makeTempDb();
-  const m1 = createMap(db, campaignId, { name: 'L1' });
-  const m2 = createMap(db, campaignId, { name: 'L2' });
-  const m3 = createMap(db, campaignId, { name: 'L3' });
+  const { db, sessionId } = makeTempDb();
+  const m1 = createMap(db, sessionId, { name: 'L1' });
+  const m2 = createMap(db, sessionId, { name: 'L2' });
+  const m3 = createMap(db, sessionId, { name: 'L3' });
   const aId = insertToken(db, { map_id: m1, link_map_id: m2, link_x: 1, link_y: 2 });
   const bId = insertToken(db, { map_id: m1, link_map_id: m3, link_x: 3, link_y: 4 });
   nullLinksToMap(db, m2);

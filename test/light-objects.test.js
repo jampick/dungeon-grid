@@ -63,7 +63,7 @@ function makeTempDb() {
   db.exec(`
     CREATE TABLE maps (
       id INTEGER PRIMARY KEY,
-      campaign_id INTEGER,
+      session_id TEXT,
       name TEXT,
       grid_type TEXT DEFAULT 'square',
       grid_size INTEGER DEFAULT 50,
@@ -132,7 +132,7 @@ function addToken(db, mapId, opts) {
 
 test('dropped lantern (object) lights cells even when only a monster shares the cell', () => {
   const db = makeTempDb();
-  const mapId = db.prepare('INSERT INTO maps (campaign_id, name, width, height, active) VALUES (?,?,?,?,1)')
+  const mapId = db.prepare('INSERT INTO maps (session_id, name, width, height, active) VALUES (?,?,?,?,1)')
     .run(1, 'LightTest', 20, 20).lastInsertRowid;
   // Monster + dropped lantern in the same cell — no party tokens at all.
   addToken(db, mapId, { kind: 'monster', name: 'Goblin', x: 10, y: 10 });

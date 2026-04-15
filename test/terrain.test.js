@@ -18,14 +18,14 @@ function makeTempDb() {
   const db = new Database(path.join(dir, 'grid.db'));
   db.pragma('journal_mode = WAL');
   db.exec(`
-    CREATE TABLE campaigns (
-      id INTEGER PRIMARY KEY,
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       created_at INTEGER
     );
     CREATE TABLE maps (
       id INTEGER PRIMARY KEY,
-      campaign_id INTEGER,
+      session_id TEXT,
       name TEXT,
       grid_type TEXT DEFAULT 'square',
       grid_size INTEGER DEFAULT 50,
@@ -73,8 +73,8 @@ function makeTempDb() {
       PRIMARY KEY (map_id, cx, cy)
     );
   `);
-  const info = db.prepare('INSERT INTO campaigns (name, created_at) VALUES (?, ?)').run('Test', Date.now());
-  return { db, campaignId: info.lastInsertRowid };
+  db.prepare("INSERT INTO sessions (id, name, created_at) VALUES ('test', ?, ?)").run('Test', Date.now());
+  return { db, sessionId: 'test' };
 }
 
 test('TERRAIN_COLORS contains all 8 expected kinds with valid hex colors', () => {
@@ -96,8 +96,8 @@ test('pickTerrainColor returns the palette color and falls back for unknown', ()
 });
 
 test('insert a terrain row and read it back', () => {
-  const { db, campaignId } = makeTempDb();
-  const mapId = createMap(db, campaignId, { name: 'M' });
+  const { db, sessionId } = makeTempDb();
+  const mapId = createMap(db, sessionId, { name: 'M' });
   db.prepare('INSERT INTO terrain (map_id, cx, cy, kind) VALUES (?,?,?,?)').run(mapId, 3, 4, 'forest');
   const row = db.prepare('SELECT * FROM terrain WHERE map_id=? AND cx=? AND cy=?').get(mapId, 3, 4);
   assert.ok(row);
@@ -105,8 +105,8 @@ test('insert a terrain row and read it back', () => {
 });
 
 test('applyTerrainPaint upserts a cell and rejects unknown kinds', () => {
-  const { db, campaignId } = makeTempDb();
-  const mapId = createMap(db, campaignId, { name: 'M' });
+  const { db, sessionId } = makeTempDb();
+  const mapId = createMap(db, sessionId, { name: 'M' });
 
   const r1 = applyTerrainPaint(db, mapId, 1, 2, 'grass');
   assert.equal(r1.ok, true);
@@ -135,9 +135,9 @@ test('applyTerrainPaint upserts a cell and rejects unknown kinds', () => {
 });
 
 test('deleteMap cascades terrain rows for that map', () => {
-  const { db, campaignId } = makeTempDb();
-  const a = createMap(db, campaignId, { name: 'A' });
-  const b = createMap(db, campaignId, { name: 'B' });
+  const { db, sessionId } = makeTempDb();
+  const a = createMap(db, sessionId, { name: 'A' });
+  const b = createMap(db, sessionId, { name: 'B' });
   applyTerrainPaint(db, a, 0, 0, 'grass');
   applyTerrainPaint(db, a, 1, 1, 'water');
   applyTerrainPaint(db, b, 5, 5, 'snow');
@@ -149,9 +149,9 @@ test('deleteMap cascades terrain rows for that map', () => {
 });
 
 test('duplicateMap carries terrain to the new map', () => {
-  const { db, campaignId } = makeTempDb();
-  const a = createMap(db, campaignId, { name: 'A' });
-  const b = createMap(db, campaignId, { name: 'B' }); // ensure not the only map
+  const { db, sessionId } = makeTempDb();
+  const a = createMap(db, sessionId, { name: 'A' });
+  const b = createMap(db, sessionId, { name: 'B' }); // ensure not the only map
   applyTerrainPaint(db, a, 2, 3, 'desert');
   applyTerrainPaint(db, a, 4, 5, 'hill');
 
