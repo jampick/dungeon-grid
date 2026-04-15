@@ -1,4 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <circle cx="32" cy="32" r="28" fill="#6b4e2e" stroke="#2a2a2a" stroke-width="3"/>
-  <text x="32" y="42" text-anchor="middle" font-family="Georgia, serif" font-size="30" font-weight="bold" fill="#f4ecd8">T</text>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><path d="M0 0h512v512H0z"/><path fill="#fff" d="M41 265v30h430v-30H41zm39 48v158.066h32V313H80zm320 0v158.066h32V313h-32z"/></svg>
