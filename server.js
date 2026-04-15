@@ -16,6 +16,8 @@ import { getObjectById } from './lib/objects.js';
 import { sizeMultiplier } from './lib/creatures.js';
 import { listMaps, createMap as createMapDb, renameMap as renameMapDb, activateMap as activateMapDb, duplicateMap as duplicateMapDb, deleteMap as deleteMapDb, performTravel, nullLinksToMap } from './lib/maps.js';
 import { getDeploymentInfo, TRIGGER_DIR, buildTriggerFilename } from './lib/deployment.js';
+import { hashPassword, verifyPassword, makeLoginLimiter } from './lib/auth.js';
+import { migrate, seedDefaultSession, deleteSession } from './lib/sessions.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3000;
@@ -77,140 +79,42 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // --- DB ---
 const db = new Database(path.join(__dirname, 'data', 'grid.db'));
 db.pragma('journal_mode = WAL');
-db.exec(`
-CREATE TABLE IF NOT EXISTS campaigns (
-  id INTEGER PRIMARY KEY,
-  name TEXT NOT NULL,
-  ruleset TEXT DEFAULT '1e',
-  approval_mode INTEGER DEFAULT 0,
-  door_approval INTEGER DEFAULT 1,
-  light_approval INTEGER DEFAULT 1,
-  show_other_hp INTEGER DEFAULT 0,
-  party_leader_id INTEGER,
-  created_at INTEGER
-);
-CREATE TABLE IF NOT EXISTS maps (
-  id INTEGER PRIMARY KEY,
-  campaign_id INTEGER,
-  name TEXT,
-  grid_type TEXT DEFAULT 'square',
-  grid_size INTEGER DEFAULT 50,
-  width INTEGER DEFAULT 30,
-  height INTEGER DEFAULT 20,
-  background TEXT,
-  active INTEGER DEFAULT 0,
-  cell_feet INTEGER DEFAULT 5,
-  fog_mode TEXT DEFAULT 'dungeon'
-);
-CREATE TABLE IF NOT EXISTS tokens (
-  id INTEGER PRIMARY KEY,
-  map_id INTEGER,
-  kind TEXT,
-  name TEXT,
-  image TEXT,
-  x REAL, y REAL,
-  hp_current INTEGER, hp_max INTEGER,
-  ac INTEGER,
-  light_radius INTEGER DEFAULT 0,
-  light_type TEXT DEFAULT 'none',
-  facing INTEGER DEFAULT 0,
-  color TEXT DEFAULT '#2a2a2a',
-  owner_id INTEGER,
-  size INTEGER DEFAULT 1,
-  race TEXT,
-  move INTEGER DEFAULT 6,
-  aoe TEXT,
-  link_map_id INTEGER,
-  link_x INTEGER,
-  link_y INTEGER
-);
-CREATE TABLE IF NOT EXISTS players (
-  id INTEGER PRIMARY KEY,
-  campaign_id INTEGER,
-  name TEXT,
-  token TEXT UNIQUE,
-  role TEXT DEFAULT 'player'
-);
-CREATE TABLE IF NOT EXISTS catalog (
-  id INTEGER PRIMARY KEY,
-  name TEXT,
-  kind TEXT,
-  image TEXT,
-  size INTEGER DEFAULT 1
-);
-CREATE TABLE IF NOT EXISTS fog (
-  map_id INTEGER PRIMARY KEY,
-  data TEXT
-);
-CREATE TABLE IF NOT EXISTS walls (
-  map_id INTEGER,
-  cx INTEGER,
-  cy INTEGER,
-  side TEXT,
-  kind TEXT DEFAULT 'wall',
-  open INTEGER DEFAULT 0,
-  PRIMARY KEY (map_id, cx, cy, side)
-);
-CREATE TABLE IF NOT EXISTS explored_cells (
-  map_id INTEGER,
-  cx INTEGER,
-  cy INTEGER,
-  PRIMARY KEY (map_id, cx, cy)
-);
-CREATE TABLE IF NOT EXISTS cell_memory (
-  map_id INTEGER,
-  cx INTEGER,
-  cy INTEGER,
-  token_id INTEGER,
-  snapshot TEXT,
-  PRIMARY KEY (map_id, cx, cy, token_id)
-);
-CREATE TABLE IF NOT EXISTS terrain (
-  map_id INTEGER,
-  cx INTEGER,
-  cy INTEGER,
-  kind TEXT,
-  PRIMARY KEY (map_id, cx, cy)
-);
-CREATE TABLE IF NOT EXISTS events (
-  id INTEGER PRIMARY KEY,
-  campaign_id INTEGER,
-  ts INTEGER,
-  actor TEXT,
-  kind TEXT,
-  payload TEXT
-);
-`);
 
-// Migrations for existing DBs
-for (const stmt of [
-  "ALTER TABLE tokens ADD COLUMN light_type TEXT DEFAULT 'none'",
-  "ALTER TABLE tokens ADD COLUMN facing INTEGER DEFAULT 0",
-  "ALTER TABLE walls ADD COLUMN kind TEXT DEFAULT 'wall'",
-  "ALTER TABLE walls ADD COLUMN open INTEGER DEFAULT 0",
-  "ALTER TABLE campaigns ADD COLUMN door_approval INTEGER DEFAULT 1",
-  "ALTER TABLE campaigns ADD COLUMN light_approval INTEGER DEFAULT 1",
-  "ALTER TABLE tokens ADD COLUMN race TEXT",
-  "ALTER TABLE tokens ADD COLUMN move INTEGER DEFAULT 6",
-  "ALTER TABLE maps ADD COLUMN cell_feet INTEGER DEFAULT 5",
-  "ALTER TABLE tokens ADD COLUMN aoe TEXT",
-  "ALTER TABLE tokens ADD COLUMN link_map_id INTEGER",
-  "ALTER TABLE tokens ADD COLUMN link_x INTEGER",
-  "ALTER TABLE tokens ADD COLUMN link_y INTEGER",
-  "ALTER TABLE maps ADD COLUMN fog_mode TEXT DEFAULT 'dungeon'",
-  // Terrain table — re-run CREATE for older DBs that predate the schema.
-  "CREATE TABLE IF NOT EXISTS terrain (map_id INTEGER, cx INTEGER, cy INTEGER, kind TEXT, PRIMARY KEY (map_id, cx, cy))",
-  "ALTER TABLE campaigns ADD COLUMN party_leader_id INTEGER",
-]) { try { db.exec(stmt); } catch {} }
+// Destructive one-shot migration — if the new `sessions` table isn't present
+// we drop every legacy table and rebuild from the Phase 1a schema. The user
+// explicitly confirmed losing pre-migration data is acceptable.
+migrate(db);
+seedDefaultSession(db);
+
+// First-boot seed of the global DM password hash. Subsequent boots prefer
+// whatever's already in the DB so rotating via the API sticks even if the
+// env var still carries an old value. Recovery path: delete the row and
+// restart with DM_PASSWORD set.
+{
+  const existing = db.prepare("SELECT value FROM instance_settings WHERE key='dm_password_hash'").get();
+  if (!existing) {
+    const hash = hashPassword(DM_PASSWORD);
+    db.prepare("INSERT INTO instance_settings (key, value) VALUES ('dm_password_hash', ?)").run(hash);
+  }
+}
 
 // Light presets / FACING_VEC / computeRevealed now live in lib/logic.js.
 
-function recomputeFog(mapId) {
-  return recomputeFogLogic(db, (event, payload) => io.emit(event, payload), mapId);
+function recomputeFog(mapId, sid) {
+  return recomputeFogLogic(db, (event, payload) => {
+    if (sid) io.to(`session:${sid}`).emit(event, payload);
+    else io.emit(event, payload);
+  }, mapId);
 }
-function autoRevealForToken(tokenId) {
+function autoRevealForToken(tokenId, sid) {
   const t = db.prepare('SELECT map_id FROM tokens WHERE id=?').get(tokenId);
-  if (t) recomputeFog(t.map_id);
+  if (t) recomputeFog(t.map_id, sid);
+}
+// Resolve the owning session for a map id so cascading server-side
+// operations (undo inverses, etc.) can target the correct broadcast room.
+function sessionForMap(mapId) {
+  const r = db.prepare('SELECT session_id FROM maps WHERE id=?').get(mapId);
+  return r?.session_id || null;
 }
 
 // In-memory pending moves (active map only): tokenId -> { fromX, fromY, toX, toY, actor }
@@ -254,9 +158,15 @@ function removePlayerSocket(playerId, socketId) {
       playerDisconnectTimers.delete(playerId);
       // Re-check: did they come back during the timer? (defense in depth)
       if (activePlayers.has(playerId)) return;
-      const map = getActiveMap();
-      if (map) reassignOwnedTokensToNull(db, map.id, playerId);
-      broadcastState();
+      // Resolve the player's session (they may have disconnected so we
+      // look them up from the still-present player row) and reassign any
+      // owned tokens on that session's active map.
+      const pRow = db.prepare('SELECT session_id FROM players WHERE id=?').get(playerId);
+      if (pRow) {
+        const map = getActiveMap(pRow.session_id);
+        if (map) reassignOwnedTokensToNull(db, map.id, playerId);
+        broadcastState(pRow.session_id);
+      }
     }, DISCONNECT_GRACE_MS);
     // Don't keep the event loop alive purely for this timer.
     if (typeof timer.unref === 'function') timer.unref();
@@ -268,15 +178,22 @@ function removePlayerSocket(playerId, socketId) {
 const undoStack = createUndoStack();
 function pushUndo(entry) { undoStack.push(entry); }
 
-// Seed default campaign
-const campaignCount = db.prepare('SELECT COUNT(*) c FROM campaigns').get().c;
-if (!campaignCount) {
-  const info = db.prepare('INSERT INTO campaigns (name, created_at) VALUES (?, ?)').run('Default Campaign', Date.now());
-  db.prepare('INSERT INTO maps (campaign_id, name, active) VALUES (?, ?, 1)').run(info.lastInsertRowid, 'Blank Map');
+// Seed a default map for the default session on first boot.
+{
+  const defaultMapCount = db.prepare("SELECT COUNT(*) c FROM maps WHERE session_id='default'").get().c;
+  if (!defaultMapCount) {
+    db.prepare("INSERT INTO maps (session_id, name, active) VALUES ('default', 'Blank Map', 1)").run();
+  }
 }
 
 // --- Auth ---
 function newToken() { return crypto.randomBytes(16).toString('hex'); }
+function verifyDm(pw) {
+  const row = db.prepare("SELECT value FROM instance_settings WHERE key='dm_password_hash'").get();
+  if (!row) return false;
+  return verifyPassword(pw, row.value);
+}
+const loginLimiter = makeLoginLimiter();
 
 function authFromReq(req) {
   const t = req.headers['x-player-token'] || req.query.t;
@@ -284,16 +201,102 @@ function authFromReq(req) {
   return db.prepare('SELECT * FROM players WHERE token = ?').get(t);
 }
 
-app.post('/api/login/dm', (req, res) => {
-  const r = loginDm(db, req.body || {}, { dmPassword: DM_PASSWORD, newToken });
-  if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
-  res.json({ token: r.token, role: r.role, name: r.name, playerId: r.playerId });
+// --- Session endpoints ---
+app.get('/api/sessions', (req, res) => {
+  const rows = db.prepare(
+    'SELECT id, name, join_password_hash, last_active_at FROM sessions ORDER BY last_active_at DESC'
+  ).all();
+  res.json(rows.map(r => ({
+    id: r.id,
+    name: r.name,
+    has_join_password: !!r.join_password_hash,
+    last_active_at: r.last_active_at,
+  })));
 });
 
-app.post('/api/login/player', (req, res) => {
-  const r = loginPlayer(db, req.body || {}, { newToken });
+app.get('/api/sessions/:id', (req, res) => {
+  const row = db.prepare('SELECT id, name, join_password_hash, approval_mode, door_approval, light_approval, show_other_hp, ruleset, party_leader_id, last_active_at FROM sessions WHERE id=?').get(req.params.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  res.json({
+    id: row.id,
+    name: row.name,
+    has_join_password: !!row.join_password_hash,
+    approval_mode: row.approval_mode,
+    door_approval: row.door_approval,
+    light_approval: row.light_approval,
+    show_other_hp: row.show_other_hp,
+    ruleset: row.ruleset,
+    party_leader_id: row.party_leader_id,
+    last_active_at: row.last_active_at,
+  });
+});
+
+app.post('/api/sessions', loginLimiter, (req, res) => {
+  const { name, join_password, dm_password } = req.body || {};
+  if (!name || !dm_password) return res.status(400).json({ error: 'missing' });
+  if (!verifyDm(dm_password)) return res.status(401).json({ error: 'wrong dm password' });
+  const id = crypto.randomBytes(5).toString('hex');
+  const now = Date.now();
+  const joinHash = join_password ? hashPassword(join_password) : null;
+  db.prepare('INSERT INTO sessions (id, name, join_password_hash, created_at, last_active_at) VALUES (?,?,?,?,?)')
+    .run(id, name, joinHash, now, now);
+  // Seed a blank map so the new session has something to look at.
+  db.prepare("INSERT INTO maps (session_id, name, active) VALUES (?, 'Blank Map', 1)").run(id);
+  res.json({ id, name });
+});
+
+app.patch('/api/sessions/:id', (req, res) => {
+  const user = authFromReq(req);
+  if (!user || user.role !== 'dm' || user.session_id !== req.params.id) {
+    return res.status(401).json({ error: 'unauth' });
+  }
+  const data = req.body || {};
+  const fields = ['name','ruleset','approval_mode','door_approval','light_approval','show_other_hp','party_leader_id'];
+  const sets = [], vals = [];
+  for (const f of fields) if (f in data) { sets.push(`${f}=?`); vals.push(data[f]); }
+  if ('join_password' in data) {
+    sets.push('join_password_hash=?');
+    vals.push(data.join_password ? hashPassword(data.join_password) : null);
+  }
+  if (!sets.length) return res.json({ ok: true });
+  vals.push(req.params.id);
+  db.prepare(`UPDATE sessions SET ${sets.join(',')} WHERE id=?`).run(...vals);
+  res.json({ ok: true });
+});
+
+app.delete('/api/sessions/:id', (req, res) => {
+  const user = authFromReq(req);
+  if (!user || user.role !== 'dm' || user.session_id !== req.params.id) {
+    return res.status(401).json({ error: 'unauth' });
+  }
+  deleteSession(db, req.params.id, path.join(__dirname, 'uploads'));
+  res.json({ ok: true });
+});
+
+app.put('/api/instance/dm-password', loginLimiter, (req, res) => {
+  const { old: oldPw, new: newPw } = req.body || {};
+  if (!oldPw || !newPw) return res.status(400).json({ error: 'missing' });
+  if (!verifyDm(oldPw)) return res.status(401).json({ error: 'wrong password' });
+  const newHash = hashPassword(newPw);
+  db.prepare("UPDATE instance_settings SET value=? WHERE key='dm_password_hash'").run(newHash);
+  res.json({ ok: true });
+});
+
+// --- Login endpoints ---
+app.post('/api/login/dm', loginLimiter, (req, res) => {
+  const r = loginDm(db, req.body || {}, { verifyDm, newToken });
   if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
-  res.json({ token: r.token, role: r.role, name: r.name, playerId: r.playerId });
+  const now = Date.now();
+  db.prepare('UPDATE sessions SET last_active_at=? WHERE id=?').run(now, r.session_id);
+  res.json({ token: r.token, role: r.role, name: r.name, playerId: r.playerId, session_id: r.session_id });
+});
+
+app.post('/api/login/player', loginLimiter, (req, res) => {
+  const r = loginPlayer(db, req.body || {}, { newToken, verifyJoin: verifyPassword });
+  if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
+  const now = Date.now();
+  db.prepare('UPDATE sessions SET last_active_at=? WHERE id=?').run(now, r.session_id);
+  res.json({ token: r.token, role: r.role, name: r.name, playerId: r.playerId, session_id: r.session_id });
 });
 
 // --- Uploads ---
@@ -303,44 +306,63 @@ const MIME_TO_EXT = {
   'image/webp': '.webp',
   'image/gif': '.gif',
 };
-const upload = multer({
-  dest: path.join(__dirname, 'uploads'),
-  limits: { fileSize: 10 * 1024 * 1024, files: 1 },
-  fileFilter: (req, file, cb) => {
-    if (MIME_TO_EXT[file.mimetype]) return cb(null, true);
-    cb(null, false);
-  },
-});
 function requireAuth(req, res, next) {
   const user = authFromReq(req);
   if (!user) return res.status(401).json({ error: 'unauth' });
   req.user = user;
   next();
 }
+// Session-scoped upload storage. Multer writes the temp file before the
+// handler runs, so we resolve the player's session in the destination
+// callback. Rejected uploads (unauthenticated) never touch disk.
+const upload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      const user = authFromReq(req);
+      if (!user) return cb(new Error('unauth'));
+      const dir = path.join(__dirname, 'uploads', user.session_id);
+      try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+      cb(null, dir);
+    },
+    filename: (req, file, cb) => {
+      const base = crypto.randomBytes(8).toString('hex');
+      cb(null, base);
+    },
+  }),
+  limits: { fileSize: 10 * 1024 * 1024, files: 1 },
+  fileFilter: (req, file, cb) => {
+    if (MIME_TO_EXT[file.mimetype]) return cb(null, true);
+    cb(null, false);
+  },
+});
 app.post('/api/upload', requireAuth, upload.single('file'), (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'image required (png/jpeg/webp/gif)' });
   const ext = MIME_TO_EXT[req.file.mimetype];
   const newName = req.file.filename + ext;
-  fs.renameSync(req.file.path, path.join(__dirname, 'uploads', newName));
-  res.json({ url: '/uploads/' + newName });
+  fs.renameSync(req.file.path, path.join(path.dirname(req.file.path), newName));
+  res.json({ url: `/uploads/${req.user.session_id}/${newName}` });
 });
 
 // --- Deployment info (captured once at startup) ---
 const DEPLOYMENT = getDeploymentInfo();
 
 // --- State helpers ---
-function getActiveMap() {
-  return db.prepare('SELECT * FROM maps WHERE active=1 ORDER BY id LIMIT 1').get();
+function getActiveMap(sid) {
+  return db.prepare('SELECT * FROM maps WHERE session_id=? AND active=1 ORDER BY id LIMIT 1').get(sid);
 }
-function getState() {
-  const campaign = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
-  const maps = db.prepare('SELECT * FROM maps WHERE campaign_id=?').all(campaign.id);
-  const activeMap = getActiveMap();
+function getState(sid) {
+  const session = db.prepare('SELECT * FROM sessions WHERE id=?').get(sid);
+  // Preserve the legacy `campaign` shape on the state payload so existing
+  // server code (and tests) that reaches for campaign.party_leader_id /
+  // approval_mode / etc. keeps working without a wholesale rename.
+  const campaign = session ? { ...session, id: session.id } : null;
+  const maps = db.prepare('SELECT * FROM maps WHERE session_id=?').all(sid);
+  const activeMap = getActiveMap(sid);
   const tokens = activeMap ? db.prepare('SELECT * FROM tokens WHERE map_id=?').all(activeMap.id) : [];
   const fogRow = activeMap ? db.prepare('SELECT data FROM fog WHERE map_id=?').get(activeMap.id) : null;
   const walls = activeMap ? db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(activeMap.id) : [];
-  const catalog = db.prepare('SELECT * FROM catalog').all();
-  const players = db.prepare('SELECT id, name, role FROM players WHERE campaign_id=?').all(campaign.id);
+  const catalog = db.prepare('SELECT * FROM catalog WHERE session_id=?').all(sid);
+  const players = db.prepare('SELECT id, name, role FROM players WHERE session_id=?').all(sid);
   const pendings = [...pendingMoves.entries()].map(([id, v]) => ({ id, ...v }));
   const doorPendings = [...pendingDoors.entries()].map(([key, v]) => ({ key, ...v }));
   const lightPendings = [...pendingLights.entries()].map(([id, v]) => ({ id, ...v }));
@@ -361,7 +383,7 @@ function getState() {
 app.get('/api/state', (req, res) => {
   const user = authFromReq(req);
   if (!user) return res.status(401).json({ error: 'unauth' });
-  res.json({ me: { id: user.id, name: user.name, role: user.role }, ...getState() });
+  res.json({ me: { id: user.id, name: user.name, role: user.role, session_id: user.session_id }, ...getState(user.session_id) });
 });
 
 // --- Socket.IO real-time ---
@@ -371,29 +393,32 @@ io.use((socket, next) => {
   const p = db.prepare('SELECT * FROM players WHERE token=?').get(token);
   if (!p) return next(new Error('unauth'));
   socket.data.player = p;
+  socket.data.session_id = p.session_id;
+  socket.join(`session:${p.session_id}`);
   next();
 });
 
-function broadcastState() {
-  io.emit('state', getState());
+function broadcastState(sid) {
+  if (sid) io.to(`session:${sid}`).emit('state', getState(sid));
 }
 
 function requireDM(socket) { return socket.data.player.role === 'dm'; }
 
 io.on('connection', (socket) => {
   const me = socket.data.player;
+  const sid = socket.data.session_id;
   // Track this socket against its player so the owner dropdown can filter
   // to currently-connected players, and so we can reassign ownership when
   // they leave (after a grace period).
   addPlayerSocket(me.id, socket.id);
   socket.on('disconnect', () => {
     removePlayerSocket(me.id, socket.id);
-    broadcastState();
+    broadcastState(sid);
   });
-  socket.emit('hello', { id: me.id, name: me.name, role: me.role });
-  socket.emit('state', getState());
+  socket.emit('hello', { id: me.id, name: me.name, role: me.role, session_id: sid });
+  socket.emit('state', getState(sid));
   // Notify everyone that the active-player set changed.
-  broadcastState();
+  broadcastState(sid);
 
   socket.on('token:move', ({ id, x, y }) => {
     const t = db.prepare('SELECT * FROM tokens WHERE id=?').get(id);
@@ -401,7 +426,7 @@ io.on('connection', (socket) => {
     // Permission: DM, owner, OR party-leader-owning-player moving a PC.
     // The leader exception lets the lead player reposition other party
     // members directly (not just via auto-follow-on-drag).
-    const campaignRow0 = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
+    const campaignRow0 = db.prepare('SELECT * FROM sessions WHERE id=?').get(sid);
     const leaderToken0 = campaignRow0 && campaignRow0.party_leader_id
       ? db.prepare('SELECT * FROM tokens WHERE id=?').get(campaignRow0.party_leader_id)
       : null;
@@ -431,11 +456,11 @@ io.on('connection', (socket) => {
         return;
       }
     }
-    const campaign = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
+    const campaign = db.prepare('SELECT * FROM sessions WHERE id=?').get(sid);
     if (campaign.approval_mode && me.role !== 'dm') {
       // Queue as pending; original position is whatever is currently committed
       pendingMoves.set(id, { fromX: t.x, fromY: t.y, toX: x, toY: y, actor: me.name });
-      broadcastState();
+      broadcastState(sid);
       return;
     }
     // Direct apply (DM or non-approval mode). Clear any pending on this token.
@@ -447,21 +472,21 @@ io.on('connection', (socket) => {
         label: `Move ${t.name || 'token'}`,
         inverse: () => {
           db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(fromX, fromY, id);
-          io.emit('token:update', { id, x: fromX, y: fromY });
-          autoRevealForToken(id);
-          broadcastState();
+          io.to(`session:${sid}`).emit('token:update', { id, x: fromX, y: fromY });
+          autoRevealForToken(id, sid);
+          broadcastState(sid);
         },
       });
     }
     db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(x, y, id);
-    io.emit('token:update', { id, x, y });
-    autoRevealForToken(id);
-    broadcastState();
+    io.to(`session:${sid}`).emit('token:update', { id, x, y });
+    autoRevealForToken(id, sid);
+    broadcastState(sid);
   });
 
   socket.on('token:create', (data) => {
     if (!requireDM(socket) && data.kind !== 'pc') return;
-    const map = getActiveMap();
+    const map = getActiveMap(sid);
     const info = db.prepare(`INSERT INTO tokens (map_id,kind,name,image,x,y,hp_current,hp_max,ac,light_radius,light_type,facing,color,owner_id,size,race,move,aoe,link_map_id,link_x,link_y)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       map.id, data.kind || 'npc', data.name || '?', data.image || null,
@@ -480,12 +505,12 @@ io.on('connection', (socket) => {
         inverse: () => {
           db.prepare('DELETE FROM tokens WHERE id=?').run(newId);
           recomputeFog(map.id);
-          broadcastState();
+          broadcastState(sid);
         },
       });
     }
     autoRevealForToken(info.lastInsertRowid);
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('token:update', (data) => {
@@ -495,7 +520,7 @@ io.on('connection', (socket) => {
     // Player light changes may need DM approval. If so, record the pending
     // entry and strip light fields from this update so remaining edits
     // (name/HP/etc.) still apply immediately.
-    const campaignRow = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
+    const campaignRow = db.prepare('SELECT * FROM sessions WHERE id=?').get(sid);
     if (shouldQueueLightChange(me.role, data, t, campaignRow)) {
       const nextType = 'light_type' in data ? data.light_type : t.light_type;
       const nextRadius = 'light_radius' in data ? data.light_radius : t.light_radius;
@@ -508,12 +533,12 @@ io.on('connection', (socket) => {
       data = { ...data };
       delete data.light_type;
       delete data.light_radius;
-      io.emit('chat:msg', { from: 'system', role: 'dm', text: `${me.name}'s light source change for ${t.name || 'token'} is pending DM approval.`, ts: Date.now() });
+      io.to(`session:${sid}`).emit('chat:msg', { from: 'system', role: 'dm', text: `${me.name}'s light source change for ${t.name || 'token'} is pending DM approval.`, ts: Date.now() });
     }
     const fields = ['name','hp_current','hp_max','ac','light_radius','light_type','facing','color','image','size','kind','owner_id','race','move','aoe','link_map_id','link_x','link_y'];
     const sets = [], vals = [];
     for (const f of fields) if (f in data) { sets.push(`${f}=?`); vals.push(data[f]); }
-    if (!sets.length) { broadcastState(); return; }
+    if (!sets.length) { broadcastState(sid); return; }
     if (me.role === 'dm') {
       const prev = snapshotToken(db, data.id);
       pushUndo({
@@ -522,14 +547,14 @@ io.on('connection', (socket) => {
         inverse: () => {
           restoreTokenRow(db, prev);
           autoRevealForToken(data.id);
-          broadcastState();
+          broadcastState(sid);
         },
       });
     }
     vals.push(data.id);
     db.prepare(`UPDATE tokens SET ${sets.join(',')} WHERE id=?`).run(...vals);
     autoRevealForToken(data.id);
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('token:delete', ({ id }) => {
@@ -545,11 +570,11 @@ io.on('connection', (socket) => {
       inverse: () => {
         restoreTokenRow(db, prev);
         recomputeFog(prev.map_id);
-        broadcastState();
+        broadcastState(sid);
       },
     });
     recomputeFog(prev.map_id);
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('token:travel', ({ linkTokenId }) => {
@@ -563,7 +588,7 @@ io.on('connection', (socket) => {
     // Push an inverse undo entry that restores the moved tokens' prior
     // position/map. DM-initiated travels also snapshot the active-map
     // switch so undo restores the previous view.
-    const prevActive = me.role === 'dm' ? getActiveMap() : null;
+    const prevActive = me.role === 'dm' ? getActiveMap(sid) : null;
     const prevRows = result.prev;
     pushUndo({
       kind: 'token:travel',
@@ -574,7 +599,7 @@ io.on('connection', (socket) => {
         if (prevActive) activateMapDb(db, prevActive.id);
         recomputeFog(result.fromMapId);
         recomputeFog(result.toMapId);
-        broadcastState();
+        broadcastState(sid);
       },
     });
     // DMs take the whole table with them. Players travel solo and stay
@@ -584,12 +609,12 @@ io.on('connection', (socket) => {
     }
     recomputeFog(result.fromMapId);
     recomputeFog(result.toMapId);
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('map:update', (data) => {
     if (!requireDM(socket)) return;
-    const map = getActiveMap();
+    const map = getActiveMap(sid);
     const fields = ['name','grid_type','grid_size','width','height','background','cell_feet','fog_mode'];
     const sets = [], vals = [];
     for (const f of fields) if (f in data) {
@@ -606,50 +631,50 @@ io.on('connection', (socket) => {
         db.prepare('UPDATE maps SET name=?, grid_type=?, grid_size=?, width=?, height=?, background=?, fog_mode=? WHERE id=?')
           .run(prev.name, prev.grid_type, prev.grid_size, prev.width, prev.height, prev.background, prev.fog_mode || 'dungeon', prev.id);
         recomputeFog(prev.id);
-        broadcastState();
+        broadcastState(sid);
       },
     });
     vals.push(map.id);
     db.prepare(`UPDATE maps SET ${sets.join(',')} WHERE id=?`).run(...vals);
     recomputeFog(map.id);
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('map:create', (data) => {
     if (!requireDM(socket)) return;
-    const campaign = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
+    const campaign = db.prepare('SELECT * FROM sessions WHERE id=?').get(sid);
     const newId = createMapDb(db, campaign.id, data || {});
     if (data && data.activate) activateMapDb(db, newId);
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('map:activate', ({ id }) => {
     if (!requireDM(socket)) return;
     activateMapDb(db, id);
     undoStack.clear();
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('map:rename', ({ id, name }) => {
     if (!requireDM(socket)) return;
     renameMapDb(db, id, name);
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('map:duplicate', ({ id }) => {
     if (!requireDM(socket)) return;
     duplicateMapDb(db, id);
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('memory:clear', () => {
     if (!requireDM(socket)) return;
-    const map = getActiveMap();
+    const map = getActiveMap(sid);
     if (!map) return;
     db.prepare('DELETE FROM explored_cells WHERE map_id=?').run(map.id);
     db.prepare('DELETE FROM cell_memory WHERE map_id=?').run(map.id);
     recomputeFog(map.id);
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('map:delete', ({ id }) => {
@@ -662,27 +687,27 @@ io.on('connection', (socket) => {
     }
     catch (e) { socket.emit('chat:msg', { from: 'system', role: 'dm', text: `map:delete failed: ${e.message}`, ts: Date.now() }); return; }
     undoStack.clear();
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('campaign:settings', (data) => {
     if (!requireDM(socket)) return;
-    const c = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
+    const c = db.prepare('SELECT * FROM sessions WHERE id=?').get(sid);
     const fields = ['ruleset','approval_mode','door_approval','light_approval','show_other_hp','name','party_leader_id'];
     const sets = [], vals = [];
     for (const f of fields) if (f in data) { sets.push(`${f}=?`); vals.push(data[f]); }
     if (!sets.length) return;
     vals.push(c.id);
-    db.prepare(`UPDATE campaigns SET ${sets.join(',')} WHERE id=?`).run(...vals);
+    db.prepare(`UPDATE sessions SET ${sets.join(',')} WHERE id=?`).run(...vals);
     if ('approval_mode' in data && !data.approval_mode) pendingMoves.clear();
     if ('door_approval' in data && !data.door_approval) pendingDoors.clear();
     if ('light_approval' in data && !data.light_approval) pendingLights.clear();
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('fog:update', ({ data }) => {
     if (!requireDM(socket)) return;
-    const map = getActiveMap();
+    const map = getActiveMap(sid);
     const prev = snapshotFog(db, map.id);
     pushUndo({
       kind: 'fog:update',
@@ -690,40 +715,40 @@ io.on('connection', (socket) => {
       inverse: () => {
         if (prev == null) {
           db.prepare('DELETE FROM fog WHERE map_id=?').run(map.id);
-          io.emit('fog:state', { data: '[]' });
+          io.to(`session:${sid}`).emit('fog:state', { data: '[]' });
         } else {
           db.prepare('INSERT INTO fog (map_id, data) VALUES (?,?) ON CONFLICT(map_id) DO UPDATE SET data=excluded.data').run(map.id, prev);
-          io.emit('fog:state', { data: prev });
+          io.to(`session:${sid}`).emit('fog:state', { data: prev });
         }
-        broadcastState();
+        broadcastState(sid);
       },
     });
     db.prepare('INSERT INTO fog (map_id, data) VALUES (?,?) ON CONFLICT(map_id) DO UPDATE SET data=excluded.data').run(map.id, data);
-    io.emit('fog:state', { data });
-    broadcastState();
+    io.to(`session:${sid}`).emit('fog:state', { data });
+    broadcastState(sid);
   });
 
   socket.on('terrain:paint', ({ cx, cy, kind }) => {
     if (!requireDM(socket)) return;
-    const map = getActiveMap();
+    const map = getActiveMap(sid);
     if (!map) return;
     const r = applyTerrainPaint(db, map.id, cx, cy, kind);
     if (!r.ok) return;
-    io.emit('terrain:state', db.prepare('SELECT cx, cy, kind FROM terrain WHERE map_id=?').all(map.id));
+    io.to(`session:${sid}`).emit('terrain:state', db.prepare('SELECT cx, cy, kind FROM terrain WHERE map_id=?').all(map.id));
   });
 
   socket.on('terrain:clear', ({ cx, cy }) => {
     if (!requireDM(socket)) return;
-    const map = getActiveMap();
+    const map = getActiveMap(sid);
     if (!map) return;
     const r = applyTerrainClear(db, map.id, cx, cy);
     if (!r.ok) return;
-    io.emit('terrain:state', db.prepare('SELECT cx, cy, kind FROM terrain WHERE map_id=?').all(map.id));
+    io.to(`session:${sid}`).emit('terrain:state', db.prepare('SELECT cx, cy, kind FROM terrain WHERE map_id=?').all(map.id));
   });
 
   socket.on('terrain:rect', ({ x1, y1, x2, y2, kind }) => {
     if (!requireDM(socket)) return;
-    const map = getActiveMap();
+    const map = getActiveMap(sid);
     if (!map) return;
     const xa = Math.min(x1, x2), xb = Math.max(x1, x2);
     const ya = Math.min(y1, y2), yb = Math.max(y1, y2);
@@ -736,12 +761,12 @@ io.on('connection', (socket) => {
       }
     });
     tx();
-    io.emit('terrain:state', db.prepare('SELECT cx, cy, kind FROM terrain WHERE map_id=?').all(map.id));
+    io.to(`session:${sid}`).emit('terrain:state', db.prepare('SELECT cx, cy, kind FROM terrain WHERE map_id=?').all(map.id));
   });
 
   socket.on('wall:toggle', ({ cx, cy, side }) => {
     if (!requireDM(socket)) return;
-    const map = getActiveMap();
+    const map = getActiveMap(sid);
     const prev = snapshotWalls(db, map.id);
     const existing = db.prepare('SELECT kind FROM walls WHERE map_id=? AND cx=? AND cy=? AND side=?').get(map.id, cx, cy, side);
     if (existing) db.prepare('DELETE FROM walls WHERE map_id=? AND cx=? AND cy=? AND side=?').run(map.id, cx, cy, side);
@@ -751,33 +776,33 @@ io.on('connection', (socket) => {
       label: existing ? 'Delete wall' : 'Create wall',
       inverse: () => {
         restoreWalls(db, map.id, prev);
-        io.emit('walls:state', snapshotWalls(db, map.id));
+        io.to(`session:${sid}`).emit('walls:state', snapshotWalls(db, map.id));
         recomputeFog(map.id);
-        broadcastState();
+        broadcastState(sid);
       },
     });
-    io.emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
+    io.to(`session:${sid}`).emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
     recomputeFog(map.id);
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('door:request', ({ cx, cy, side }) => {
     // Player (or DM) wants to open/close a door
-    const map = getActiveMap();
+    const map = getActiveMap(sid);
     const d = db.prepare("SELECT kind, open FROM walls WHERE map_id=? AND cx=? AND cy=? AND side=? AND kind='door'").get(map.id, cx, cy, side);
     if (!d) return;
-    const campaign = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
+    const campaign = db.prepare('SELECT * FROM sessions WHERE id=?').get(sid);
     const toOpen = !d.open;
     if (me.role !== 'dm' && campaign.door_approval) {
       pendingDoors.set(`${cx},${cy},${side}`, { actor: me.name, toOpen, cx, cy, side });
-      broadcastState();
+      broadcastState(sid);
       return;
     }
     db.prepare('UPDATE walls SET open=? WHERE map_id=? AND cx=? AND cy=? AND side=?').run(toOpen ? 1 : 0, map.id, cx, cy, side);
     pendingDoors.delete(`${cx},${cy},${side}`);
-    io.emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
+    io.to(`session:${sid}`).emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
     recomputeFog(map.id);
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('door:resolve', ({ approved, key }) => {
@@ -786,26 +811,26 @@ io.on('connection', (socket) => {
     if (!p) return;
     pendingDoors.delete(key);
     if (approved) {
-      const map = getActiveMap();
+      const map = getActiveMap(sid);
       db.prepare('UPDATE walls SET open=? WHERE map_id=? AND cx=? AND cy=? AND side=?').run(p.toOpen ? 1 : 0, map.id, p.cx, p.cy, p.side);
-      io.emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
+      io.to(`session:${sid}`).emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
       recomputeFog(map.id);
     }
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('door:cycle', ({ cx, cy, side }) => {
     if (!requireDM(socket)) return;
-    const map = getActiveMap();
+    const map = getActiveMap(sid);
     const prev = snapshotWalls(db, map.id);
     pushUndo({
       kind: 'door:cycle',
       label: 'Door cycle',
       inverse: () => {
         restoreWalls(db, map.id, prev);
-        io.emit('walls:state', snapshotWalls(db, map.id));
+        io.to(`session:${sid}`).emit('walls:state', snapshotWalls(db, map.id));
         recomputeFog(map.id);
-        broadcastState();
+        broadcastState(sid);
       },
     });
     const existing = db.prepare('SELECT kind, open FROM walls WHERE map_id=? AND cx=? AND cy=? AND side=?').get(map.id, cx, cy, side);
@@ -819,33 +844,33 @@ io.on('connection', (socket) => {
     } else {
       db.prepare('DELETE FROM walls WHERE map_id=? AND cx=? AND cy=? AND side=?').run(map.id, cx, cy, side);
     }
-    io.emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
+    io.to(`session:${sid}`).emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
     recomputeFog(map.id);
   });
 
   socket.on('wall:clear', () => {
     if (!requireDM(socket)) return;
-    const map = getActiveMap();
+    const map = getActiveMap(sid);
     const prev = snapshotWalls(db, map.id);
     pushUndo({
       kind: 'wall:clear',
       label: 'Clear walls',
       inverse: () => {
         restoreWalls(db, map.id, prev);
-        io.emit('walls:state', snapshotWalls(db, map.id));
+        io.to(`session:${sid}`).emit('walls:state', snapshotWalls(db, map.id));
         recomputeFog(map.id);
-        broadcastState();
+        broadcastState(sid);
       },
     });
     db.prepare('DELETE FROM walls WHERE map_id=?').run(map.id);
-    io.emit('walls:state', []);
+    io.to(`session:${sid}`).emit('walls:state', []);
     recomputeFog(map.id);
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('map:generate-random', () => {
     if (!requireDM(socket)) return;
-    const map = getActiveMap();
+    const map = getActiveMap(sid);
     if (!map) return;
     const prevWalls = snapshotWalls(db, map.id);
     // Snapshot existing object tokens so undo restores furniture too.
@@ -896,27 +921,27 @@ io.on('connection', (socket) => {
         });
         restore();
         recomputeFog(map.id);
-        io.emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
-        broadcastState();
+        io.to(`session:${sid}`).emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
+        broadcastState(sid);
       },
     });
     recomputeFog(map.id);
-    io.emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
-    broadcastState();
+    io.to(`session:${sid}`).emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
+    broadcastState(sid);
   });
 
   socket.on('wall:rect', ({ x1, y1, x2, y2 }) => {
     if (!requireDM(socket)) return;
-    const map = getActiveMap();
+    const map = getActiveMap(sid);
     const prev = snapshotWalls(db, map.id);
     pushUndo({
       kind: 'wall:rect',
       label: 'Room walls',
       inverse: () => {
         restoreWalls(db, map.id, prev);
-        io.emit('walls:state', snapshotWalls(db, map.id));
+        io.to(`session:${sid}`).emit('walls:state', snapshotWalls(db, map.id));
         recomputeFog(map.id);
-        broadcastState();
+        broadcastState(sid);
       },
     });
     const minX = Math.min(x1, x2), maxX = Math.max(x1, x2);
@@ -933,7 +958,7 @@ io.on('connection', (socket) => {
       }
     });
     tx();
-    io.emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
+    io.to(`session:${sid}`).emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
     recomputeFog(map.id);
   });
 
@@ -941,21 +966,21 @@ io.on('connection', (socket) => {
     if (!requireDM(socket)) return;
     db.prepare('INSERT INTO catalog (name, kind, image, size) VALUES (?,?,?,?)')
       .run(data.name, data.kind || 'object', data.image || null, data.size || 1);
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('chat:msg', ({ text }) => {
-    io.emit('chat:msg', { from: me.name, role: me.role, text, ts: Date.now() });
+    io.to(`session:${sid}`).emit('chat:msg', { from: me.name, role: me.role, text, ts: Date.now() });
   });
 
   socket.on('chat:clear', () => {
     if (!canClearChat(me.role)) return;
-    io.emit('chat:cleared', { by: me.name, ts: Date.now() });
+    io.to(`session:${sid}`).emit('chat:cleared', { by: me.name, ts: Date.now() });
   });
 
   socket.on('dice:roll', ({ expr }) => {
     const result = rollDice(expr);
-    io.emit('chat:msg', { from: me.name, role: me.role, text: `🎲 ${expr} = **${result.total}** (${result.rolls.join(', ')})`, ts: Date.now() });
+    io.to(`session:${sid}`).emit('chat:msg', { from: me.name, role: me.role, text: `🎲 ${expr} = **${result.total}** (${result.rolls.join(', ')})`, ts: Date.now() });
   });
 
   socket.on('dm:update-request', () => {
@@ -973,9 +998,9 @@ io.on('connection', (socket) => {
   socket.on('dm:undo', () => {
     if (!requireDM(socket)) return;
     const entry = undoStack.pop();
-    if (!entry) { broadcastState(); return; }
+    if (!entry) { broadcastState(sid); return; }
     try { entry.inverse(); } catch (e) { console.error('undo failed', e); }
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('light:resolve', ({ approved, tokenId }) => {
@@ -991,16 +1016,16 @@ io.on('connection', (socket) => {
           label: `Light change ${prev.name || 'token'}`,
           inverse: () => {
             restoreTokenRow(db, prev);
-            autoRevealForToken(tokenId);
-            broadcastState();
+            autoRevealForToken(tokenId, sid);
+            broadcastState(sid);
           },
         });
       }
       db.prepare('UPDATE tokens SET light_type=?, light_radius=? WHERE id=?')
         .run(pending.to.light_type, pending.to.light_radius, tokenId);
-      autoRevealForToken(tokenId);
+      autoRevealForToken(tokenId, sid);
     }
-    broadcastState();
+    broadcastState(sid);
   });
 
   socket.on('approval:resolve', ({ approved, tokenId }) => {
@@ -1010,18 +1035,18 @@ io.on('connection', (socket) => {
     pendingMoves.delete(tokenId);
     if (approved) {
       db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(pending.toX, pending.toY, tokenId);
-      io.emit('token:update', { id: tokenId, x: pending.toX, y: pending.toY });
-      autoRevealForToken(tokenId);
+      io.to(`session:${sid}`).emit('token:update', { id: tokenId, x: pending.toX, y: pending.toY });
+      autoRevealForToken(tokenId, sid);
       // Apply queued formation followers atomically with the leader move.
       if (Array.isArray(pending.followerMoves)) {
         for (const fm of pending.followerMoves) {
           db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(fm.targetX, fm.targetY, fm.tokenId);
-          io.emit('token:update', { id: fm.tokenId, x: fm.targetX, y: fm.targetY });
+          io.to(`session:${sid}`).emit('token:update', { id: fm.tokenId, x: fm.targetX, y: fm.targetY });
           autoRevealForToken(fm.tokenId);
         }
       }
     }
-    broadcastState();
+    broadcastState(sid);
   });
 
   // --- Party formation follow ---------------------------------------------
@@ -1035,7 +1060,7 @@ io.on('connection', (socket) => {
   socket.on('party:follow', ({ leaderId, leaderFromX, leaderFromY, followers }) => {
     const leader = db.prepare('SELECT * FROM tokens WHERE id=?').get(leaderId);
     if (!leader) return;
-    const campaign = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
+    const campaign = db.prepare('SELECT * FROM sessions WHERE id=?').get(sid);
     if (campaign.party_leader_id !== leaderId) return;
     if (me.role !== 'dm' && leader.owner_id !== me.id) return;
     const map = db.prepare('SELECT * FROM maps WHERE id=?').get(leader.map_id);
@@ -1078,7 +1103,7 @@ io.on('connection', (socket) => {
       // Single approval covers leader + entire formation.
       pending.followerMoves = followerMoves;
       pendingMoves.set(leaderId, pending);
-      broadcastState();
+      broadcastState(sid);
       return;
     }
     // Direct apply — capture undo as one combined entry.
@@ -1093,19 +1118,19 @@ io.on('connection', (socket) => {
         inverse: () => {
           for (const r of beforeRows) {
             db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(r.x, r.y, r.id);
-            io.emit('token:update', { id: r.id, x: r.x, y: r.y });
+            io.to(`session:${sid}`).emit('token:update', { id: r.id, x: r.x, y: r.y });
             autoRevealForToken(r.id);
           }
-          broadcastState();
+          broadcastState(sid);
         },
       });
     }
     for (const fm of followerMoves) {
       db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(fm.targetX, fm.targetY, fm.tokenId);
-      io.emit('token:update', { id: fm.tokenId, x: fm.targetX, y: fm.targetY });
+      io.to(`session:${sid}`).emit('token:update', { id: fm.tokenId, x: fm.targetX, y: fm.targetY });
       autoRevealForToken(fm.tokenId);
     }
-    broadcastState();
+    broadcastState(sid);
   });
 });
 
