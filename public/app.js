@@ -304,7 +304,7 @@ function renderTokenList() {
   for (const t of state.tokens) {
     if (!isDM && !seenIds.has(t.id)) continue;
     const row = document.createElement('div');
-    row.className = 'tk';
+    row.className = 'tk' + (isTokenSelected(t.id, selectedTokenId) ? ' selected' : '');
     const dot = document.createElement('span');
     dot.className = 'dot';
     dot.style.backgroundColor = t.color || '';
@@ -312,7 +312,13 @@ function renderTokenList() {
     name.textContent = t.name || '';
     row.appendChild(dot);
     row.appendChild(name);
-    row.onclick = () => openTokenDialog(t.id);
+    row.onclick = () => {
+      // Sync selection before opening the dialog so the canvas halo
+      // and row highlight stay in lockstep when the dialog closes.
+      selectedTokenId = t.id;
+      draw();
+      openTokenDialog(t.id);
+    };
     list.appendChild(row);
   }
 }
@@ -1391,6 +1397,8 @@ canvas.addEventListener('mousedown', (e) => {
       moveBudget: Number.isFinite(chosen.move) ? chosen.move : 6,
     };
     selectedTokenId = chosen.id;
+    renderTokenList();
+    draw();
     return;
   }
   // hit test a door (near nearest edge, within ~1/3 cell)
