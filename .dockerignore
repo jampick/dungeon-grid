@@ -1,0 +1,10 @@
+.git
+.github
+node_modules
+data
+uploads
+triggers
+docs/
+docker-compose.yml
+*.log
+.env
