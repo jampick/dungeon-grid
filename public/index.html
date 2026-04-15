@@ -200,6 +200,15 @@
     <label>Owner
       <select id="tkOwner"><option value="">(none)</option></select>
     </label>
+    <fieldset id="tkLinkFields" class="token-link-fields dm-only" style="display:none">
+      <legend>Map link</legend>
+      <label>Target map
+        <select id="tkLinkMap"><option value="">(none — not a teleport)</option></select>
+      </label>
+      <label>Destination X <input id="tkLinkX" type="number" min="0" /></label>
+      <label>Destination Y <input id="tkLinkY" type="number" min="0" /></label>
+    </fieldset>
+    <button id="tkTravel" type="button" style="display:none">Travel to linked map</button>
     <label>Image <input id="tkImage" type="file" accept="image/*" /></label>
     <button id="tkClearImage" type="button">Clear image</button>
     <div class="token-image-preview">

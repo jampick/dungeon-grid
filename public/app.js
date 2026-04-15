@@ -1716,6 +1716,35 @@ function openTokenDialog(id) {
     try { pendingAoe = JSON.parse(t.aoe); } catch { pendingAoe = null; }
   }
   refreshPresetRow();
+  // --- Map link fields (teleport to another map) ---
+  // DM sees the editable fieldset. Any user sees a "Travel" button if the
+  // token has a link to another map. We deliberately use an explicit button
+  // here instead of a canvas click hook to avoid accidental teleports.
+  const linkFields = $('tkLinkFields');
+  const travelBtn = $('tkTravel');
+  if (linkFields) {
+    const mapSel = $('tkLinkMap');
+    if (mapSel) {
+      const curMapId = state.activeMap?.id;
+      const maps = state.maps || [];
+      mapSel.innerHTML = '<option value="">(none — not a teleport)</option>' +
+        maps.filter(m => m.id !== curMapId)
+            .map(m => `<option value="${m.id}">${m.name || ('Map ' + m.id)}</option>`)
+            .join('');
+      mapSel.value = t?.link_map_id ? String(t.link_map_id) : '';
+    }
+    $('tkLinkX').value = t?.link_x ?? '';
+    $('tkLinkY').value = t?.link_y ?? '';
+    linkFields.style.display = auth.role === 'dm' ? '' : 'none';
+  }
+  if (travelBtn) {
+    const hasLink = !!(t && t.link_map_id);
+    travelBtn.style.display = hasLink ? '' : 'none';
+    if (hasLink) {
+      const tgt = (state.maps || []).find(m => m.id === t.link_map_id);
+      travelBtn.textContent = `Travel to ${tgt?.name || 'linked map'}`;
+    }
+  }
   dlg.showModal();
 }
 $('tkClearImage').onclick = () => {
@@ -1798,6 +1827,16 @@ $('tkSave').onclick = async () => {
     move: parseInt($('tkMove').value, 10) || 6,
     size: sizeMultiplier($('tkSize') ? $('tkSize').value : 'medium'),
   };
+  // Only DMs can edit map-link fields; for non-DMs leave the existing
+  // link_map_id/x/y untouched by omitting them from the update payload.
+  if (auth.role === 'dm') {
+    const linkMap = $('tkLinkMap') ? $('tkLinkMap').value : '';
+    data.link_map_id = linkMap ? parseInt(linkMap, 10) : null;
+    const lx = $('tkLinkX') ? $('tkLinkX').value : '';
+    const ly = $('tkLinkY') ? $('tkLinkY').value : '';
+    data.link_x = lx !== '' ? parseInt(lx, 10) : null;
+    data.link_y = ly !== '' ? parseInt(ly, 10) : null;
+  }
   const file = $('tkImage').files[0];
   if (file) {
     const fd = new FormData(); fd.append('file', file);
@@ -1825,6 +1864,17 @@ $('tkDelete').onclick = () => {
   if (editingTokenId) socket.emit('token:delete', { id: editingTokenId });
   dlg.close();
 };
+if ($('tkTravel')) {
+  $('tkTravel').onclick = () => {
+    if (!editingTokenId) return;
+    const t = state.tokens.find(x => x.id === editingTokenId);
+    if (!t || !t.link_map_id) return;
+    const tgt = (state.maps || []).find(m => m.id === t.link_map_id);
+    if (!confirm(`Travel to "${tgt?.name || 'linked map'}"?`)) return;
+    socket.emit('token:travel', { linkTokenId: editingTokenId });
+    dlg.close();
+  };
+}
 $('tkCopy').onclick = () => {
   if (!editingTokenId) return;
   const t = state.tokens.find(x => x.id === editingTokenId);
