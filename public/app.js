@@ -839,15 +839,38 @@ function drawToken(t, size, offset) {
   ctx.strokeStyle = t.color || themeColors.ink;
   ctx.stroke();
 
-  // facing tick (small notch pointing outward)
+  // facing arrowhead (short shaft + small filled triangle)
   if (t.facing != null) {
     const a = FACING_RAD[t.facing % 8];
+    const cosA = Math.cos(a), sinA = Math.sin(a);
+    const tipX = cx + cosA * r * 1.1;
+    const tipY = cy + sinA * r * 1.1;
+    const headLen = size * 0.18;
+    const halfWidth = size * 0.1;
+    const baseX = tipX - cosA * headLen;
+    const baseY = tipY - sinA * headLen;
+    const perpX = -sinA, perpY = cosA;
+    const facingColor = t.color || themeColors.ink;
+
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+
+    // shaft
     ctx.beginPath();
-    ctx.moveTo(cx + Math.cos(a) * r * 0.6, cy + Math.sin(a) * r * 0.6);
-    ctx.lineTo(cx + Math.cos(a) * r * 1.05, cy + Math.sin(a) * r * 1.05);
-    ctx.strokeStyle = t.color || themeColors.ink;
+    ctx.moveTo(cx + cosA * r * 0.55, cy + sinA * r * 0.55);
+    ctx.lineTo(baseX, baseY);
+    ctx.strokeStyle = facingColor;
     ctx.lineWidth = 2;
     ctx.stroke();
+
+    // triangular arrowhead
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(baseX + perpX * halfWidth, baseY + perpY * halfWidth);
+    ctx.lineTo(baseX - perpX * halfWidth, baseY - perpY * halfWidth);
+    ctx.closePath();
+    ctx.fillStyle = facingColor;
+    ctx.fill();
   }
 
   ctx.font = `${Math.floor(size * 0.22)}px Georgia, serif`;
