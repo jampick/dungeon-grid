@@ -10,16 +10,21 @@ test('stored "light" wins over system dark', () => {
   assert.equal(resolveTheme('light', 'dark'), 'light');
 });
 
-test('null stored falls back to system preference', () => {
+test('null stored with system dark → dark', () => {
   assert.equal(resolveTheme(null, 'dark'), 'dark');
-  assert.equal(resolveTheme(null, 'light'), 'light');
 });
 
-test('invalid stored string falls back to light', () => {
-  assert.equal(resolveTheme('banana', 'dark'), 'light');
-  assert.equal(resolveTheme('', 'dark'), 'light');
+test('null stored with system light → dark (dark is the default)', () => {
+  assert.equal(resolveTheme(null, 'light'), 'dark');
 });
 
-test('null stored with invalid system falls back to light', () => {
-  assert.equal(resolveTheme(null, undefined), 'light');
+test('null stored with null system → dark', () => {
+  assert.equal(resolveTheme(null, null), 'dark');
+  assert.equal(resolveTheme(null, undefined), 'dark');
+});
+
+test('invalid stored string falls back to dark', () => {
+  assert.equal(resolveTheme('banana', 'dark'), 'dark');
+  assert.equal(resolveTheme('banana', 'light'), 'dark');
+  assert.equal(resolveTheme('', 'light'), 'dark');
 });

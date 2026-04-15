@@ -285,11 +285,8 @@ const ctx = canvas.getContext('2d');
 // Kept in sync with lib/logic.js#resolveTheme (which is unit tested).
 function resolveTheme(stored, systemPref) {
   if (stored === 'light' || stored === 'dark') return stored;
-  if (stored == null) {
-    if (systemPref === 'dark' || systemPref === 'light') return systemPref;
-    return 'light';
-  }
-  return 'light';
+  if (stored == null && systemPref === 'dark') return 'dark';
+  return 'dark';
 }
 
 // Cached CSS var colors used by the canvas renderer. Refreshed on theme change.
@@ -482,96 +479,107 @@ function draw() {
   const cellVisible = (x, y) => !fogCells.has(`${x},${y}`);
   const tokenVisibleToMe = (t) => isDM || (t.owner_id && t.owner_id === me.playerId) || cellVisible(t.x, t.y);
 
-  // light sources (soft glow) — only from tokens visible to me
-  for (const t of state.tokens) {
-    if (!tokenVisibleToMe(t)) continue;
-    const preset = LIGHT_PRESETS[t.light_type || 'none'] || LIGHT_PRESETS.none;
-    const r = (t.light_radius > 0 ? t.light_radius : preset.radius) * size;
-    if (r <= 0) continue;
-    const cx = (t.x + 0.5) * size, cy = (t.y + 0.5) * size;
-    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    g.addColorStop(0, themeColors.lightGlowInner);
-    g.addColorStop(1, themeColors.lightGlowOuter);
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    if (preset.cone) {
-      const facing = FACING_RAD[(t.facing || 0) % 8];
-      const half = Math.PI / 3; // 60° half-angle for playability
-      ctx.moveTo(cx, cy);
-      ctx.arc(cx, cy, r, facing - half, facing + half);
-      ctx.closePath();
-    } else {
-      ctx.arc(cx, cy, r, 0, Math.PI*2);
-    }
-    ctx.fill();
-  }
-
-  // fog overlay — rounded-light version.
-  // Strategy (Option B, simplified): draw a solid fog rectangle over the
-  // entire map, then carve out a soft radial hole for each party light
-  // source using destination-out. The carve is clipped to the union of
-  // server-visible cells so walls still occlude (the server's BFS is the
-  // source of truth — see computeFog in lib/logic.js).
+  // fog overlay — rounded-light version (two-pass per-light clip).
+  //
+  // For each party light source we build a single clip region that is the
+  // intersection of (a) the union of server-visible cells around the light
+  // and (b) a circle (or cone) of the light's pixel radius. Canvas `clip()`
+  // calls compose as intersections, so we save/restore once per light and
+  // layer two clips. Inside that clip we do a flat destination-out carve of
+  // the fog — no soft radial falloff, since the circle clip provides the
+  // clean edge (this eliminates the cardinal-direction "finger" artifacts
+  // that appeared when the gradient's fade ended before the cell edge).
+  //
+  // After carving, we re-enter the same clip with source-over and paint a
+  // warm radial "firelight" fill, so that in dark mode (where the revealed
+  // --paper is near black) the lit area actually looks lit. This replaces
+  // the old separate "soft glow" pass that ran before the fog.
   if (fogCells.size) {
-    // Build visible-cell rects once per frame (avoid per-light allocation).
-    const visibleRects = [];
-    for (let vx = 0; vx < m.width; vx++) {
-      for (let vy = 0; vy < m.height; vy++) {
-        if (!fogCells.has(`${vx},${vy}`)) {
-          visibleRects.push(vx, vy);
-        }
-      }
-    }
-
     ctx.save();
-    // Offscreen-style layering: render fog into its own compositing group by
-    // drawing solid fog, then destination-out carving, all within save/restore.
     ctx.fillStyle = isDM ? themeColors.fogDm : themeColors.fogPlayer;
     ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
 
-    if (visibleRects.length) {
-      // Clip to union of visible cells so light cannot bleed past walls.
-      ctx.beginPath();
-      for (let i = 0; i < visibleRects.length; i += 2) {
-        const vx = visibleRects[i], vy = visibleRects[i + 1];
+  // Helper: build the clip path for a single light's shape (circle or cone)
+  // intersected with the union of visible cells inside the light's bounding
+  // box. We only walk cells within the bounding radius to keep per-light
+  // cost O(r^2) rather than O(map).
+  const buildLightClip = (t, preset) => {
+    const rCells = t.light_radius > 0 ? t.light_radius : preset.radius;
+    if (rCells <= 0) return null;
+    const cx = (t.x + 0.5) * size, cy = (t.y + 0.5) * size;
+    const rPx = rCells * size;
+    // Visible cells inside the light's bounding box, trimmed to map bounds.
+    const minX = Math.max(0, t.x - rCells - 1);
+    const maxX = Math.min(m.width  - 1, t.x + rCells + 1);
+    const minY = Math.max(0, t.y - rCells - 1);
+    const maxY = Math.min(m.height - 1, t.y + rCells + 1);
+    return { cx, cy, rPx, rCells, preset, minX, maxX, minY, maxY };
+  };
+
+  const applyLightClip = (info) => {
+    // First clip: visible cells in the light's bounding box. The server's
+    // BFS fog is still the source of truth for wall occlusion.
+    ctx.beginPath();
+    for (let vx = info.minX; vx <= info.maxX; vx++) {
+      for (let vy = info.minY; vy <= info.maxY; vy++) {
+        if (fogCells.has(`${vx},${vy}`)) continue;
         ctx.rect(vx * size, vy * size, size, size);
       }
-      ctx.clip();
-
-      ctx.globalCompositeOperation = 'destination-out';
-      // Carve a soft circle for each party light source. Use a radial
-      // gradient that is fully opaque in the center (fully erases fog) and
-      // fades out toward the edge for a smooth lit/fogged transition.
-      for (const t of state.tokens) {
-        const isParty = t.kind === 'pc' || t.owner_id != null;
-        if (!isParty) continue;
-        if (!tokenVisibleToMe(t)) continue;
-        const preset = LIGHT_PRESETS[t.light_type || 'none'] || LIGHT_PRESETS.none;
-        const rCells = t.light_radius > 0 ? t.light_radius : preset.radius;
-        if (rCells <= 0) continue;
-        // Extend carve radius slightly past the server's hard cell radius so
-        // the soft falloff lands on the cell boundary rather than inside it.
-        const r = (rCells + 0.5) * size;
-        const cx = (t.x + 0.5) * size, cy = (t.y + 0.5) * size;
-        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-        g.addColorStop(0,    'rgba(0,0,0,1)');
-        g.addColorStop(0.65, 'rgba(0,0,0,0.95)');
-        g.addColorStop(1,    'rgba(0,0,0,0)');
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        if (preset.cone) {
-          const facing = FACING_RAD[(t.facing || 0) % 8];
-          const half = Math.PI / 3;
-          ctx.moveTo(cx, cy);
-          ctx.arc(cx, cy, r, facing - half, facing + half);
-          ctx.closePath();
-        } else {
-          ctx.arc(cx, cy, r, 0, Math.PI * 2);
-        }
-        ctx.fill();
-      }
-      ctx.globalCompositeOperation = 'source-over';
     }
+    ctx.clip();
+    // Second clip: circle or cone. Canvas intersects with the prior clip.
+    ctx.beginPath();
+    if (info.preset.cone) {
+      ctx.moveTo(info.cx, info.cy);
+      ctx.arc(info.cx, info.cy, info.rPx, info.coneStart, info.coneEnd);
+      ctx.closePath();
+    } else {
+      ctx.arc(info.cx, info.cy, info.rPx, 0, Math.PI * 2);
+    }
+    ctx.clip();
+  };
+
+  // Iterate party light sources once; two-pass per light (carve, then glow).
+  for (const t of state.tokens) {
+    const isParty = t.kind === 'pc' || t.owner_id != null;
+    if (!isParty) continue;
+    if (!tokenVisibleToMe(t)) continue;
+    const preset = LIGHT_PRESETS[t.light_type || 'none'] || LIGHT_PRESETS.none;
+    const info = buildLightClip(t, preset);
+    if (!info) continue;
+    if (preset.cone) {
+      const facing = FACING_RAD[(t.facing || 0) % 8];
+      const half = Math.PI / 3;
+      info.coneStart = facing - half;
+      info.coneEnd   = facing + half;
+    }
+
+    // Pass 1: carve the fog hole with a flat destination-out fill.
+    if (fogCells.size) {
+      ctx.save();
+      applyLightClip(info);
+      ctx.globalCompositeOperation = 'destination-out';
+      ctx.fillStyle = 'rgba(0,0,0,1)';
+      ctx.fillRect(info.minX * size, info.minY * size,
+                   (info.maxX - info.minX + 1) * size,
+                   (info.maxY - info.minY + 1) * size);
+      ctx.restore();
+    }
+
+    // Pass 2: paint a warm firelight fill on top of the revealed area.
+    ctx.save();
+    applyLightClip(info);
+    const warmInner = themeColors.lightWarmInner || 'rgba(255, 180, 90, 0.55)';
+    const warmOuter = themeColors.lightWarmOuter || 'rgba(255, 150, 70, 0.15)';
+    const wg = ctx.createRadialGradient(info.cx, info.cy, 0, info.cx, info.cy, info.rPx);
+    wg.addColorStop(0, warmInner);
+    wg.addColorStop(1, warmOuter);
+    ctx.fillStyle = wg;
+    ctx.fillRect(info.minX * size, info.minY * size,
+                 (info.maxX - info.minX + 1) * size,
+                 (info.maxY - info.minY + 1) * size);
     ctx.restore();
   }
 
