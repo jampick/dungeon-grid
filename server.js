@@ -9,7 +9,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { LIGHT_PRESETS, FACING_VEC, computeRevealed, rollDice, recomputeFog as recomputeFogLogic,
   canClearChat, createUndoStack, snapshotToken, restoreTokenRow, snapshotWalls, restoreWalls, snapshotMap, snapshotFog,
-  isReachable, shouldQueueLightChange, loginDm, loginPlayer } from './lib/logic.js';
+  isReachable, pathCost, shouldQueueLightChange, loginDm, loginPlayer } from './lib/logic.js';
 import { listMaps, createMap as createMapDb, renameMap as renameMapDb, activateMap as activateMapDb, duplicateMap as duplicateMapDb, deleteMap as deleteMapDb } from './lib/maps.js';
 import { getDeploymentInfo, TRIGGER_DIR, buildTriggerFilename } from './lib/deployment.js';
 
@@ -97,7 +97,9 @@ CREATE TABLE IF NOT EXISTS tokens (
   facing INTEGER DEFAULT 0,
   color TEXT DEFAULT '#2a2a2a',
   owner_id INTEGER,
-  size INTEGER DEFAULT 1
+  size INTEGER DEFAULT 1,
+  race TEXT,
+  move INTEGER DEFAULT 6
 );
 CREATE TABLE IF NOT EXISTS players (
   id INTEGER PRIMARY KEY,
@@ -144,6 +146,8 @@ for (const stmt of [
   "ALTER TABLE walls ADD COLUMN open INTEGER DEFAULT 0",
   "ALTER TABLE campaigns ADD COLUMN door_approval INTEGER DEFAULT 1",
   "ALTER TABLE campaigns ADD COLUMN light_approval INTEGER DEFAULT 1",
+  "ALTER TABLE tokens ADD COLUMN race TEXT",
+  "ALTER TABLE tokens ADD COLUMN move INTEGER DEFAULT 6",
 ]) { try { db.exec(stmt); } catch {} }
 
 // Light presets / FACING_VEC / computeRevealed now live in lib/logic.js.
@@ -292,6 +296,15 @@ io.on('connection', (socket) => {
         socket.emit('state', getState());
         return;
       }
+      // Distance cap: shortest-path cost from current position must be
+      // within the token's move budget. DMs bypass (handled above).
+      const budget = Number.isFinite(t.move) ? t.move : 6;
+      const cost = pathCost(t.x, t.y, x, y, wallSet, budget);
+      if (cost > budget) {
+        socket.emit('token:update', { id, x: t.x, y: t.y });
+        socket.emit('state', getState());
+        return;
+      }
     }
     const campaign = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
     if (campaign.approval_mode && me.role !== 'dm') {
@@ -324,12 +337,13 @@ io.on('connection', (socket) => {
   socket.on('token:create', (data) => {
     if (!requireDM(socket) && data.kind !== 'pc') return;
     const map = getActiveMap();
-    const info = db.prepare(`INSERT INTO tokens (map_id,kind,name,image,x,y,hp_current,hp_max,ac,light_radius,light_type,facing,color,owner_id,size)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    const info = db.prepare(`INSERT INTO tokens (map_id,kind,name,image,x,y,hp_current,hp_max,ac,light_radius,light_type,facing,color,owner_id,size,race,move)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       map.id, data.kind || 'npc', data.name || '?', data.image || null,
       data.x || 5, data.y || 5, data.hp_current || 10, data.hp_max || 10,
       data.ac || 10, data.light_radius || 0, data.light_type || 'none', data.facing || 0,
-      data.color || '#2a2a2a', data.owner_id || null, data.size || 1
+      data.color || '#2a2a2a', data.owner_id || null, data.size || 1,
+      data.race || null, Number.isFinite(parseInt(data.move, 10)) ? parseInt(data.move, 10) : 6
     );
     if (me.role === 'dm') {
       const newId = info.lastInsertRowid;
@@ -369,7 +383,7 @@ io.on('connection', (socket) => {
       delete data.light_radius;
       io.emit('chat:msg', { from: 'system', role: 'dm', text: `${me.name}'s light source change for ${t.name || 'token'} is pending DM approval.`, ts: Date.now() });
     }
-    const fields = ['name','hp_current','hp_max','ac','light_radius','light_type','facing','color','image','size','kind','owner_id'];
+    const fields = ['name','hp_current','hp_max','ac','light_radius','light_type','facing','color','image','size','kind','owner_id','race','move'];
     const sets = [], vals = [];
     for (const f of fields) if (f in data) { sets.push(`${f}=?`); vals.push(data[f]); }
     if (!sets.length) { broadcastState(); return; }
