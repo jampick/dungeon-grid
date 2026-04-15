@@ -24,5 +24,7 @@ test('public/app.js is still an ES module (first code line is an import)', () =>
 });
 
 test('public/app.js imports from /lib/logic.js (browser-accessible static path)', () => {
-  assert.match(src, /from\s+['"]\/lib\/logic\.js['"]/);
+  // The path may include a ?v={{LIB_VERSION}} cache-bust query string that
+  // server.js rewrites at startup. See test/lib-cache-bust.test.js.
+  assert.match(src, /from\s+['"]\/lib\/logic\.js(\?[^'"]*)?['"]/);
 });
