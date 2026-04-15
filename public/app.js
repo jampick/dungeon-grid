@@ -21,6 +21,11 @@ const FACING_RAD = [
 
 let fogMode = null; // 'reveal' | 'hide' | null
 let fogCells = new Set();
+// Three-state fog: cells that have ever been observed by a party member.
+// Subset of fogCells where we render dim "memory" instead of pitch black.
+let exploredCells = new Set();
+// Remembered tokens for explored-but-fogged cells: array of { cx, cy, snapshot }.
+let memoryTokens = [];
 // While a token is being dragged, we compute fog client-side so the light
 // glides with the cursor instead of teleporting on mouseup. Null means "use
 // the server's authoritative fogCells". Reset on mouseup and on fog:state.
@@ -133,6 +138,8 @@ function applyState() {
     bgImg = null;
     bgUrl = null;
     fogCells = new Set();
+    exploredCells = new Set();
+    memoryTokens = [];
     walls = new Map();
     view = { scale: 1, ox: 20, oy: 20 };
     selectedTokenId = null;
@@ -149,6 +156,8 @@ function applyState() {
   $('showOtherHp').checked = !!state.campaign.show_other_hp;
   $('ruleset').value = state.campaign.ruleset || '1e';
   loadFog(state.fog);
+  loadExplored(state.explored || []);
+  loadMemoryTokens(state.memoryTokens || []);
   loadWalls(state.walls || []);
   renderTokenList();
   renderOwners();
@@ -535,10 +544,44 @@ function draw() {
   // warm radial "firelight" fill, so that in dark mode (where the revealed
   // --paper is near black) the lit area actually looks lit. This replaces
   // the old separate "soft glow" pass that ran before the fog.
+  // Three-layer fog: unexplored cells get the dark "fogPlayer/fogDm" color
+  // (same as before), explored-but-not-lit cells get a dim memory overlay.
+  // Both are painted as solid layers up front; the per-light carve below
+  // then removes whichever cells are currently lit using destination-out.
   if (displayFog.size) {
     ctx.save();
-    ctx.fillStyle = isDM ? themeColors.fogDm : themeColors.fogPlayer;
-    ctx.fillRect(0, 0, W, H);
+    // Unexplored: paint only cells in fog AND NOT in exploredCells.
+    // For DMs, exploredCells is irrelevant — they see everything, so use
+    // the existing fogDm fill across the full fog set.
+    if (isDM || !exploredCells.size) {
+      ctx.fillStyle = isDM ? themeColors.fogDm : themeColors.fogPlayer;
+      ctx.fillRect(0, 0, W, H);
+    } else {
+      // Players: paint unexplored cells solid, then memory cells dim on top.
+      ctx.fillStyle = themeColors.fogPlayer;
+      ctx.beginPath();
+      let anyUnex = false;
+      for (const k of displayFog) {
+        if (exploredCells.has(k)) continue;
+        const comma = k.indexOf(',');
+        const cx = +k.slice(0, comma), cy = +k.slice(comma + 1);
+        ctx.rect(cx * size, cy * size, size, size);
+        anyUnex = true;
+      }
+      if (anyUnex) ctx.fill();
+      // Memory layer — dim so walls/ghost tokens stay legible.
+      ctx.fillStyle = 'rgba(30,25,20,0.78)';
+      ctx.beginPath();
+      let anyMem = false;
+      for (const k of displayFog) {
+        if (!exploredCells.has(k)) continue;
+        const comma = k.indexOf(',');
+        const cx = +k.slice(0, comma), cy = +k.slice(comma + 1);
+        ctx.rect(cx * size, cy * size, size, size);
+        anyMem = true;
+      }
+      if (anyMem) ctx.fill();
+    }
     ctx.restore();
   }
 
@@ -633,7 +676,12 @@ function draw() {
     if (!isDM) {
       const a = cellVisible(ix, iy);
       const b = side === 'n' ? cellVisible(ix, iy - 1) : cellVisible(ix - 1, iy);
-      if (!a && !b) continue;
+      // Also show walls/doors that border an explored (memory) cell so the
+      // remembered room layout stays visible after the party leaves.
+      const aMem = exploredCells.has(`${ix},${iy}`);
+      const bKey = side === 'n' ? `${ix},${iy - 1}` : `${ix - 1},${iy}`;
+      const bMem = exploredCells.has(bKey);
+      if (!a && !b && !aMem && !bMem) continue;
     }
     const x = ix * size, y = iy * size;
     // edge endpoints
@@ -746,6 +794,21 @@ function draw() {
       if (toks.length > 1) {
         drawStackBadge(toks[0].x, toks[0].y, size, toks.length);
       }
+    }
+  }
+
+  // Memory tokens: ghosted remembered tokens in fogged-but-explored cells.
+  // DMs already see real tokens through fog so we skip; players only see
+  // memory in cells that are NOT currently lit.
+  if (!isDM && memoryTokens && memoryTokens.length) {
+    for (const mt of memoryTokens) {
+      const key = `${mt.cx},${mt.cy}`;
+      if (!displayFog.has(key)) continue; // currently lit -> real token shown
+      if (!exploredCells.has(key)) continue;
+      ctx.save();
+      ctx.globalAlpha = 0.4;
+      drawMemoryToken(mt.snapshot, mt.cx, mt.cy, size);
+      ctx.restore();
     }
   }
 
@@ -922,6 +985,44 @@ function drawToken(t, size, offset) {
     ctx.strokeRect(bx, by, bw, bh);
   }
   ctx.restore();
+}
+
+// Render a remembered token snapshot as a ghost: just a circle outline +
+// portrait (if cached) at reduced opacity. No HP bar, no facing arrow, no
+// pending indicators. Caller is responsible for setting globalAlpha.
+function drawMemoryToken(snap, gx, gy, size) {
+  if (!snap) return;
+  const cx = (gx + 0.5) * size;
+  const cy = (gy + 0.5) * size;
+  const r = size * 0.42 * (snap.size || 1);
+  let imgEntry = null;
+  if (snap.image) imgEntry = getTokenImage(snap.image);
+  const hasImage = !!(imgEntry && imgEntry.status === 'loaded' && imgEntry.img.complete);
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, 0, Math.PI * 2);
+  ctx.fillStyle = themeColors.paper;
+  ctx.fill();
+  if (hasImage) {
+    ctx.save();
+    ctx.clip();
+    const prevFilter = ctx.filter;
+    try { ctx.filter = 'saturate(0.2) contrast(0.9)'; } catch (_) {}
+    ctx.drawImage(imgEntry.img, cx - r, cy - r, r * 2, r * 2);
+    try { ctx.filter = prevFilter || 'none'; } catch (_) {}
+    ctx.restore();
+  }
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = snap.color || themeColors.ink;
+  ctx.setLineDash([3, 3]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  if (snap.name) {
+    ctx.font = `${Math.floor(size * 0.2)}px Georgia, serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = themeColors.ink;
+    ctx.fillText(snap.name.slice(0, 10), cx, cy);
+  }
 }
 
 // Small circular badge showing "xN" in the top-right corner of a cell when
@@ -1267,6 +1368,10 @@ $('tkDelete').onclick = () => {
 // ---- Fog ----
 $('fogReveal').onclick = () => { fogMode = fogMode === 'reveal' ? null : 'reveal'; };
 $('fogHide').onclick = () => { fogMode = fogMode === 'hide' ? null : 'hide'; };
+const memBtn = $('memoryClear');
+if (memBtn) memBtn.onclick = () => {
+  if (confirm('Clear all party memory for this map?')) socket.emit('memory:clear');
+};
 $('fogClear').onclick = () => { fogCells = new Set(); pushFog(); draw(); };
 $('fogAll').onclick = () => {
   const m = state.activeMap;
@@ -1281,6 +1386,12 @@ function loadFog(data) {
   try { fogCells = new Set(JSON.parse(data || '[]')); } catch { fogCells = new Set(); }
   // Any authoritative fog from the server trumps the drag-time preview.
   previewFogCells = null;
+}
+function loadExplored(list) {
+  exploredCells = new Set(Array.isArray(list) ? list : []);
+}
+function loadMemoryTokens(list) {
+  memoryTokens = Array.isArray(list) ? list : [];
 }
 function loadWalls(list) {
   walls = new Map(list.map(w => [`${w.cx},${w.cy},${w.side}`, { kind: w.kind || 'wall', open: !!w.open }]));
