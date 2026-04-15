@@ -991,6 +991,11 @@ $('bgFile').onchange = async () => {
   const { url } = await res.json();
   socket.emit('map:update', { background: url });
 };
+$('clearBg').onclick = () => {
+  if (!confirm('Clear the background image for this map?')) return;
+  $('bgFile').value = '';
+  socket.emit('map:update', { background: null });
+};
 
 $('approval').onchange = () => socket.emit('campaign:settings', { approval_mode: $('approval').checked ? 1 : 0 });
 $('doorApproval').onchange = () => socket.emit('campaign:settings', { door_approval: $('doorApproval').checked ? 1 : 0 });
