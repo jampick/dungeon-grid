@@ -9,7 +9,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { LIGHT_PRESETS, FACING_VEC, computeRevealed, rollDice, recomputeFog as recomputeFogLogic,
   canClearChat, createUndoStack, snapshotToken, restoreTokenRow, snapshotWalls, restoreWalls, snapshotMap, snapshotFog,
-  isReachable } from './lib/logic.js';
+  isReachable, shouldQueueLightChange } from './lib/logic.js';
 import { listMaps, createMap as createMapDb, renameMap as renameMapDb, activateMap as activateMapDb, duplicateMap as duplicateMapDb, deleteMap as deleteMapDb } from './lib/maps.js';
 import { getDeploymentInfo, TRIGGER_DIR, buildTriggerFilename } from './lib/deployment.js';
 
@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
   ruleset TEXT DEFAULT '1e',
   approval_mode INTEGER DEFAULT 0,
   door_approval INTEGER DEFAULT 1,
+  light_approval INTEGER DEFAULT 1,
   show_other_hp INTEGER DEFAULT 0,
   created_at INTEGER
 );
@@ -130,6 +131,7 @@ for (const stmt of [
   "ALTER TABLE walls ADD COLUMN kind TEXT DEFAULT 'wall'",
   "ALTER TABLE walls ADD COLUMN open INTEGER DEFAULT 0",
   "ALTER TABLE campaigns ADD COLUMN door_approval INTEGER DEFAULT 1",
+  "ALTER TABLE campaigns ADD COLUMN light_approval INTEGER DEFAULT 1",
 ]) { try { db.exec(stmt); } catch {} }
 
 // Light presets / FACING_VEC / computeRevealed now live in lib/logic.js.
@@ -146,6 +148,8 @@ function autoRevealForToken(tokenId) {
 const pendingMoves = new Map();
 // In-memory pending door actions: "cx,cy,side" -> { actor, toOpen }
 const pendingDoors = new Map();
+// In-memory pending light changes: tokenId -> { actor, from:{light_type,light_radius}, to:{light_type,light_radius} }
+const pendingLights = new Map();
 
 // In-memory undo stack for DM actions. Cleared when the active map changes.
 const undoStack = createUndoStack();
@@ -238,7 +242,8 @@ function getState() {
   const players = db.prepare('SELECT id, name, role FROM players WHERE campaign_id=?').all(campaign.id);
   const pendings = [...pendingMoves.entries()].map(([id, v]) => ({ id, ...v }));
   const doorPendings = [...pendingDoors.entries()].map(([key, v]) => ({ key, ...v }));
-  return { campaign, maps, activeMap, tokens, fog: fogRow?.data || null, walls, catalog, players, pendings, doorPendings, undoLabel: undoStack.topLabel(), deployment: DEPLOYMENT };
+  const lightPendings = [...pendingLights.entries()].map(([id, v]) => ({ id, ...v }));
+  return { campaign, maps, activeMap, tokens, fog: fogRow?.data || null, walls, catalog, players, pendings, doorPendings, lightPendings, undoLabel: undoStack.topLabel(), deployment: DEPLOYMENT };
 }
 
 app.get('/api/state', (req, res) => {
@@ -346,10 +351,28 @@ io.on('connection', (socket) => {
     const t = db.prepare('SELECT * FROM tokens WHERE id=?').get(data.id);
     if (!t) return;
     if (me.role !== 'dm' && t.owner_id !== me.id) return;
+    // Player light changes may need DM approval. If so, record the pending
+    // entry and strip light fields from this update so remaining edits
+    // (name/HP/etc.) still apply immediately.
+    const campaignRow = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
+    if (shouldQueueLightChange(me.role, data, t, campaignRow)) {
+      const nextType = 'light_type' in data ? data.light_type : t.light_type;
+      const nextRadius = 'light_radius' in data ? data.light_radius : t.light_radius;
+      pendingLights.set(data.id, {
+        actor: me.name,
+        from: { light_type: t.light_type, light_radius: t.light_radius },
+        to:   { light_type: nextType,      light_radius: nextRadius    },
+      });
+      // Strip the queued fields; any other edits fall through.
+      data = { ...data };
+      delete data.light_type;
+      delete data.light_radius;
+      io.emit('chat:msg', { from: 'system', role: 'dm', text: `${me.name}'s light source change for ${t.name || 'token'} is pending DM approval.`, ts: Date.now() });
+    }
     const fields = ['name','hp_current','hp_max','ac','light_radius','light_type','facing','color','image','size','kind','owner_id'];
     const sets = [], vals = [];
     for (const f of fields) if (f in data) { sets.push(`${f}=?`); vals.push(data[f]); }
-    if (!sets.length) return;
+    if (!sets.length) { broadcastState(); return; }
     if (me.role === 'dm') {
       const prev = snapshotToken(db, data.id);
       pushUndo({
@@ -373,6 +396,7 @@ io.on('connection', (socket) => {
     const prev = snapshotToken(db, id);
     if (!prev) return;
     pendingMoves.delete(id);
+    pendingLights.delete(id);
     db.prepare('DELETE FROM tokens WHERE id=?').run(id);
     pushUndo({
       kind: 'token:delete',
@@ -449,7 +473,7 @@ io.on('connection', (socket) => {
   socket.on('campaign:settings', (data) => {
     if (!requireDM(socket)) return;
     const c = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
-    const fields = ['ruleset','approval_mode','door_approval','show_other_hp','name'];
+    const fields = ['ruleset','approval_mode','door_approval','light_approval','show_other_hp','name'];
     const sets = [], vals = [];
     for (const f of fields) if (f in data) { sets.push(`${f}=?`); vals.push(data[f]); }
     if (!sets.length) return;
@@ -457,6 +481,7 @@ io.on('connection', (socket) => {
     db.prepare(`UPDATE campaigns SET ${sets.join(',')} WHERE id=?`).run(...vals);
     if ('approval_mode' in data && !data.approval_mode) pendingMoves.clear();
     if ('door_approval' in data && !data.door_approval) pendingDoors.clear();
+    if ('light_approval' in data && !data.light_approval) pendingLights.clear();
     broadcastState();
   });
 
@@ -657,6 +682,31 @@ io.on('connection', (socket) => {
     const entry = undoStack.pop();
     if (!entry) { broadcastState(); return; }
     try { entry.inverse(); } catch (e) { console.error('undo failed', e); }
+    broadcastState();
+  });
+
+  socket.on('light:resolve', ({ approved, tokenId }) => {
+    if (!requireDM(socket)) return;
+    const pending = pendingLights.get(tokenId);
+    if (!pending) return;
+    pendingLights.delete(tokenId);
+    if (approved) {
+      const prev = snapshotToken(db, tokenId);
+      if (prev) {
+        pushUndo({
+          kind: 'token:update',
+          label: `Light change ${prev.name || 'token'}`,
+          inverse: () => {
+            restoreTokenRow(db, prev);
+            autoRevealForToken(tokenId);
+            broadcastState();
+          },
+        });
+      }
+      db.prepare('UPDATE tokens SET light_type=?, light_radius=? WHERE id=?')
+        .run(pending.to.light_type, pending.to.light_radius, tokenId);
+      autoRevealForToken(tokenId);
+    }
     broadcastState();
   });
 
