@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, stackOffsets, effectiveLightRadius } from '/lib/logic.js?v={{LIB_VERSION}}';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius } from '/lib/logic.js?v={{LIB_VERSION}}';
 import { getCreatures } from '/lib/creatures.js?v={{LIB_VERSION}}';
 
 const $ = (id) => document.getElementById(id);
@@ -768,6 +768,23 @@ function draw() {
     ctx.lineWidth = 1;
   }
 
+  // movement range cue: dashed circle around the drag origin. Player only —
+  // DMs bypass the cap so they don't need the cue.
+  if (dragging?.mode === 'token' && auth.role !== 'dm' && Number.isFinite(dragging.moveBudget)) {
+    const cx = (dragging.origX + 0.5) * size;
+    const cy = (dragging.origY + 0.5) * size;
+    const radius = dragging.moveBudget * size;
+    ctx.save();
+    ctx.setLineDash([6, 4]);
+    ctx.strokeStyle = themeColors.accent || 'rgba(122,46,46,0.8)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+  }
+
   // pending approval ghosts — DM only
   if (isDM && state.pendings?.length) {
     for (const p of state.pendings) {
@@ -1127,6 +1144,7 @@ canvas.addEventListener('mousedown', (e) => {
         origY: t.y,
         lastValidX: t.x,
         lastValidY: t.y,
+        moveBudget: Number.isFinite(t.move) ? t.move : 6,
       };
       selectedTokenId = t.id;
       return;
@@ -1187,10 +1205,14 @@ canvas.addEventListener('mousemove', (e) => {
         // cell toward the cursor, stopping at the first blocked edge. This
         // matches the server's BFS wall rule (cardinals via isBlocked and
         // diagonals requiring both orthogonals open).
-        const { x: nx, y: ny } = walkUntilBlocked(
-          dragging.lastValidX, dragging.lastValidY,
+        // Distance cap: walk from origin (not lastValid) so the budget is
+        // measured against the original mousedown cell, and the token sticks
+        // at the last cell within move range.
+        const { x: nx, y: ny } = walkWithRange(
+          dragging.origX, dragging.origY,
           targetX, targetY,
           walls,
+          dragging.moveBudget,
         );
         dragging.lastValidX = nx;
         dragging.lastValidY = ny;
@@ -1376,6 +1398,14 @@ function resetTokenImagePreview(currentSrc) {
   setPreviewSrc($('tkImgPreview'), '');
   try { $('tkImage').value = ''; } catch {}
 }
+function populateRaceList() {
+  const sel = $('tkRace');
+  if (!sel) return;
+  const ruleset = state?.campaign?.ruleset || '1e';
+  const races = getRaces(ruleset);
+  sel.innerHTML = '<option value="">(none)</option>' +
+    races.map(r => `<option value="${r.id}">${r.name}</option>`).join('');
+}
 function openTokenDialog(id) {
   editingTokenId = id;
   const t = id ? state.tokens.find(t => t.id === id) : null;
@@ -1396,6 +1426,9 @@ function openTokenDialog(id) {
   $('tkImage').value = '';
   clearImageRequested = false;
   $('tkClearImage').style.display = t && t.image ? '' : 'none';
+  populateRaceList();
+  $('tkRace').value = t?.race || '';
+  $('tkMove').value = t?.move ?? 6;
   $('tkDelete').style.display = id && auth.role === 'dm' ? '' : 'none';
   resetTokenImagePreview(t?.image || '');
   refreshPresetRow();
@@ -1435,6 +1468,15 @@ $('tkImage').onchange = () => {
   reader.onload = () => setPreviewSrc($('tkImgPreview'), reader.result);
   reader.readAsDataURL(file);
 };
+// Auto-fill move when user picks a race in the dialog.
+if ($('tkRace')) {
+  $('tkRace').addEventListener('change', () => {
+    const ruleset = state?.campaign?.ruleset || '1e';
+    const raceId = $('tkRace').value;
+    if (!raceId) return;
+    $('tkMove').value = defaultMoveForRace(ruleset, raceId);
+  });
+}
 $('tkCancel').onclick = () => { resetTokenImagePreview(''); clearImageRequested = false; dlg.close(); };
 $('tkSave').onclick = async () => {
   const data = {
@@ -1448,6 +1490,8 @@ $('tkSave').onclick = async () => {
     facing: parseInt($('tkFacing').value, 10),
     color: $('tkColor').value,
     owner_id: $('tkOwner').value ? parseInt($('tkOwner').value, 10) : null,
+    race: $('tkRace').value || null,
+    move: parseInt($('tkMove').value, 10) || 6,
   };
   const file = $('tkImage').files[0];
   if (file) {
