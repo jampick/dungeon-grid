@@ -67,7 +67,7 @@ function seed(db) {
   return mapId;
 }
 
-test('recomputeFog: PC lights cells; monster does not', () => {
+test('recomputeFog: PC lights cells; monster with torch now also lights', () => {
   const { db } = makeTempDb();
   const mapId = seed(db);
   const fog = recomputeFog(db, () => {}, mapId);
@@ -76,10 +76,13 @@ test('recomputeFog: PC lights cells; monster does not', () => {
   assert.ok(!fogSet.has('5,5'), 'PC cell should be lit');
   assert.ok(!fogSet.has('6,5'), 'cell next to PC should be lit');
   assert.ok(!fogSet.has('5,6'));
-  // Cells around monster (15,15) SHOULD be fogged
-  assert.ok(fogSet.has('15,15'), 'monster cell should be fogged (monster does not reveal)');
-  assert.ok(fogSet.has('14,15'));
-  assert.ok(fogSet.has('15,14'));
+  // Any token with a real light_type now emits light — the monster torch at
+  // (15,15) illuminates its own cell and neighbors.
+  assert.ok(!fogSet.has('15,15'), 'monster with torch should light its cell');
+  assert.ok(!fogSet.has('14,15'));
+  assert.ok(!fogSet.has('15,14'));
+  // Far corner with no nearby light source remains fogged.
+  assert.ok(fogSet.has('0,0'), 'far cell should remain fogged');
 });
 
 test('recomputeFog emits fog:state with JSON data', () => {
