@@ -13,7 +13,7 @@ import { LIGHT_PRESETS, FACING_VEC, computeRevealed, rollDice, recomputeFog as r
   computeActivePlayerIds, reassignOwnedTokensToNull } from './lib/logic.js';
 import { getObjectById } from './lib/objects.js';
 import { sizeMultiplier } from './lib/creatures.js';
-import { listMaps, createMap as createMapDb, renameMap as renameMapDb, activateMap as activateMapDb, duplicateMap as duplicateMapDb, deleteMap as deleteMapDb } from './lib/maps.js';
+import { listMaps, createMap as createMapDb, renameMap as renameMapDb, activateMap as activateMapDb, duplicateMap as duplicateMapDb, deleteMap as deleteMapDb, performTravel, nullLinksToMap } from './lib/maps.js';
 import { getDeploymentInfo, TRIGGER_DIR, buildTriggerFilename } from './lib/deployment.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -116,7 +116,10 @@ CREATE TABLE IF NOT EXISTS tokens (
   size INTEGER DEFAULT 1,
   race TEXT,
   move INTEGER DEFAULT 6,
-  aoe TEXT
+  aoe TEXT,
+  link_map_id INTEGER,
+  link_x INTEGER,
+  link_y INTEGER
 );
 CREATE TABLE IF NOT EXISTS players (
   id INTEGER PRIMARY KEY,
@@ -181,6 +184,9 @@ for (const stmt of [
   "ALTER TABLE tokens ADD COLUMN move INTEGER DEFAULT 6",
   "ALTER TABLE maps ADD COLUMN cell_feet INTEGER DEFAULT 5",
   "ALTER TABLE tokens ADD COLUMN aoe TEXT",
+  "ALTER TABLE tokens ADD COLUMN link_map_id INTEGER",
+  "ALTER TABLE tokens ADD COLUMN link_x INTEGER",
+  "ALTER TABLE tokens ADD COLUMN link_y INTEGER",
 ]) { try { db.exec(stmt); } catch {} }
 
 // Light presets / FACING_VEC / computeRevealed now live in lib/logic.js.
@@ -433,14 +439,15 @@ io.on('connection', (socket) => {
   socket.on('token:create', (data) => {
     if (!requireDM(socket) && data.kind !== 'pc') return;
     const map = getActiveMap();
-    const info = db.prepare(`INSERT INTO tokens (map_id,kind,name,image,x,y,hp_current,hp_max,ac,light_radius,light_type,facing,color,owner_id,size,race,move,aoe)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
+    const info = db.prepare(`INSERT INTO tokens (map_id,kind,name,image,x,y,hp_current,hp_max,ac,light_radius,light_type,facing,color,owner_id,size,race,move,aoe,link_map_id,link_x,link_y)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).run(
       map.id, data.kind || 'npc', data.name || '?', data.image || null,
       data.x || 5, data.y || 5, data.hp_current || 10, data.hp_max || 10,
       data.ac || 10, data.light_radius || 0, data.light_type || 'none', data.facing || 0,
       data.color || '#2a2a2a', data.owner_id || null, data.size || 1,
       data.race || null, Number.isFinite(parseInt(data.move, 10)) ? parseInt(data.move, 10) : 6,
-      data.aoe || null
+      data.aoe || null,
+      data.link_map_id ?? null, data.link_x ?? null, data.link_y ?? null
     );
     if (me.role === 'dm') {
       const newId = info.lastInsertRowid;
@@ -480,7 +487,7 @@ io.on('connection', (socket) => {
       delete data.light_radius;
       io.emit('chat:msg', { from: 'system', role: 'dm', text: `${me.name}'s light source change for ${t.name || 'token'} is pending DM approval.`, ts: Date.now() });
     }
-    const fields = ['name','hp_current','hp_max','ac','light_radius','light_type','facing','color','image','size','kind','owner_id','race','move','aoe'];
+    const fields = ['name','hp_current','hp_max','ac','light_radius','light_type','facing','color','image','size','kind','owner_id','race','move','aoe','link_map_id','link_x','link_y'];
     const sets = [], vals = [];
     for (const f of fields) if (f in data) { sets.push(`${f}=?`); vals.push(data[f]); }
     if (!sets.length) { broadcastState(); return; }
@@ -519,6 +526,41 @@ io.on('connection', (socket) => {
       },
     });
     recomputeFog(prev.map_id);
+    broadcastState();
+  });
+
+  socket.on('token:travel', ({ linkTokenId }) => {
+    const result = performTravel(db, me.id, linkTokenId);
+    if (!result.ok) {
+      if (result.reason === 'no-owned-token') {
+        socket.emit('chat:msg', { from: 'system', role: 'dm', text: 'No owned token to travel with.', ts: Date.now() });
+      }
+      return;
+    }
+    // Push an inverse undo entry that restores the moved tokens' prior
+    // position/map. DM-initiated travels also snapshot the active-map
+    // switch so undo restores the previous view.
+    const prevActive = me.role === 'dm' ? getActiveMap() : null;
+    const prevRows = result.prev;
+    pushUndo({
+      kind: 'token:travel',
+      label: 'Travel',
+      inverse: () => {
+        const upd = db.prepare('UPDATE tokens SET map_id=?, x=?, y=? WHERE id=?');
+        for (const r of prevRows) upd.run(r.map_id, r.x, r.y, r.id);
+        if (prevActive) activateMapDb(db, prevActive.id);
+        recomputeFog(result.fromMapId);
+        recomputeFog(result.toMapId);
+        broadcastState();
+      },
+    });
+    // DMs take the whole table with them. Players travel solo and stay
+    // rendered against whatever map is currently active for the campaign.
+    if (me.role === 'dm') {
+      activateMapDb(db, result.toMapId);
+    }
+    recomputeFog(result.fromMapId);
+    recomputeFog(result.toMapId);
     broadcastState();
   });
 
@@ -589,6 +631,7 @@ io.on('connection', (socket) => {
       deleteMapDb(db, id);
       db.prepare('DELETE FROM explored_cells WHERE map_id=?').run(id);
       db.prepare('DELETE FROM cell_memory WHERE map_id=?').run(id);
+      nullLinksToMap(db, id);
     }
     catch (e) { socket.emit('chat:msg', { from: 'system', role: 'dm', text: `map:delete failed: ${e.message}`, ts: Date.now() }); return; }
     undoStack.clear();
