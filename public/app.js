@@ -324,8 +324,13 @@ function renderTokenList() {
     row.appendChild(name);
     row.onclick = () => {
       // Sync selection before opening the dialog so the canvas halo
-      // and row highlight stay in lockstep when the dialog closes.
+      // and row highlight stay in lockstep. Order matters:
+      //   1) update state
+      //   2) re-render sidebar so the NEW row gets .selected
+      //   3) redraw canvas so the halo moves to the new token
+      //   4) open the dialog last (it doesn't touch selection)
       selectedTokenId = t.id;
+      renderTokenList();
       draw();
       openTokenDialog(t.id);
     };
