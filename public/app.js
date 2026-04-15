@@ -1598,6 +1598,12 @@ $('tkPreset').onchange = () => {
   setPreviewSrc($('tkImgPreview'), preset.image);
   if ($('tkSize') && preset.size) $('tkSize').value = preset.size;
   if (preset.move != null) $('tkMove').value = preset.move;
+  // Light-source object presets carry a light_type — propagate it and
+  // clear the custom radius override so the preset's default radius wins.
+  if (preset.light_type) {
+    $('tkLightType').value = preset.light_type;
+    $('tkLight').value = 0;
+  }
 };
 $('tkImage').onchange = () => {
   const file = $('tkImage').files[0];

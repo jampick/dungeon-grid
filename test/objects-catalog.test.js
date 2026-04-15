@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { OBJECTS, getObjects, getObjectById } from '../lib/objects.js';
+import { LIGHT_PRESETS } from '../lib/logic.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUB = path.join(__dirname, '..', 'public', 'creatures');
@@ -30,6 +31,16 @@ test('getObjects returns the catalog and getObjectById finds entries', () => {
   assert.ok(getObjectById('chest'));
   assert.strictEqual(getObjectById('chest').name, 'Chest');
   assert.strictEqual(getObjectById('nope'), null);
+});
+
+test('OBJECTS catalog includes light source presets with valid light_type', () => {
+  const lit = OBJECTS.filter(o => o.light_type);
+  assert.ok(lit.length >= 7, `expected >=7 light source objects, got ${lit.length}`);
+  const validKeys = new Set(Object.keys(LIGHT_PRESETS));
+  for (const o of lit) {
+    assert.ok(validKeys.has(o.light_type), `${o.id}: light_type "${o.light_type}" not in LIGHT_PRESETS`);
+    assert.notEqual(o.light_type, 'none', `${o.id}: light source must not be "none"`);
+  }
 });
 
 test('every object preset has a generated SVG file on disk', () => {
