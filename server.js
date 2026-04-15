@@ -9,7 +9,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { LIGHT_PRESETS, FACING_VEC, computeRevealed, rollDice, recomputeFog as recomputeFogLogic,
   canClearChat, createUndoStack, snapshotToken, restoreTokenRow, snapshotWalls, restoreWalls, snapshotMap, snapshotFog,
-  isReachable, shouldQueueLightChange } from './lib/logic.js';
+  isReachable, shouldQueueLightChange, loginDm, loginPlayer } from './lib/logic.js';
 import { listMaps, createMap as createMapDb, renameMap as renameMapDb, activateMap as activateMapDb, duplicateMap as duplicateMapDb, deleteMap as deleteMapDb } from './lib/maps.js';
 import { getDeploymentInfo, TRIGGER_DIR, buildTriggerFilename } from './lib/deployment.js';
 
@@ -172,27 +172,15 @@ function authFromReq(req) {
 }
 
 app.post('/api/login/dm', (req, res) => {
-  const { password, name } = req.body;
-  if (password !== DM_PASSWORD) return res.status(401).json({ error: 'bad password' });
-  const campaign = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
-  let p = db.prepare('SELECT * FROM players WHERE campaign_id=? AND role=?').get(campaign.id, 'dm');
-  if (!p) {
-    const info = db.prepare('INSERT INTO players (campaign_id, name, token, role) VALUES (?,?,?,?)').run(campaign.id, name || 'DM', newToken(), 'dm');
-    p = db.prepare('SELECT * FROM players WHERE id=?').get(info.lastInsertRowid);
-  }
-  res.json({ token: p.token, role: p.role, name: p.name, playerId: p.id });
+  const r = loginDm(db, req.body || {}, { dmPassword: DM_PASSWORD, newToken });
+  if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
+  res.json({ token: r.token, role: r.role, name: r.name, playerId: r.playerId });
 });
 
 app.post('/api/login/player', (req, res) => {
-  const { name } = req.body;
-  if (!name) return res.status(400).json({ error: 'name required' });
-  const campaign = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
-  let p = db.prepare('SELECT * FROM players WHERE campaign_id=? AND name=? AND role=?').get(campaign.id, name, 'player');
-  if (!p) {
-    const info = db.prepare('INSERT INTO players (campaign_id, name, token, role) VALUES (?,?,?,?)').run(campaign.id, name, newToken(), 'player');
-    p = db.prepare('SELECT * FROM players WHERE id=?').get(info.lastInsertRowid);
-  }
-  res.json({ token: p.token, role: p.role, name: p.name, playerId: p.id });
+  const r = loginPlayer(db, req.body || {}, { newToken });
+  if (!r.ok) return res.status(r.status || 400).json({ error: r.error });
+  res.json({ token: r.token, role: r.role, name: r.name, playerId: r.playerId });
 });
 
 // --- Uploads ---
