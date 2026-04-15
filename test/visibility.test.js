@@ -61,6 +61,37 @@ test('closed door blocks light like a wall', () => {
   assert.equal(revealed.length, 9);
 });
 
+test('open-room torch: diagonal cells are lit, not a cross shape', () => {
+  // Regression: a user reported a cross-shaped torch (only cardinals lit,
+  // diagonals dark) in an open room with no walls. The BFS must produce a
+  // roughly circular shape so that (11,11), (12,12), etc. are included and
+  // cells just outside the Euclidean radius are not.
+  const revealed = computeRevealed(torchAt(10, 10), map, new Map());
+  const set = new Set(revealed);
+
+  // Immediate diagonal neighbors (dist = sqrt(2) ~ 1.41) must be lit.
+  assert.ok(set.has('11,11'), '(11,11) should be lit');
+  assert.ok(set.has('9,9'),   '(9,9) should be lit');
+  assert.ok(set.has('11,9'),  '(11,9) should be lit');
+  assert.ok(set.has('9,11'),  '(9,11) should be lit');
+
+  // Further diagonal (dist = sqrt(8) ~ 2.83, within radius 3) must be lit.
+  assert.ok(set.has('12,12'), '(12,12) should be lit');
+
+  // Just outside the radius (dist = sqrt(10) ~ 3.16) must NOT be lit.
+  assert.ok(!set.has('13,11'), '(13,11) is outside radius 3 and must be dark');
+  assert.ok(!set.has('11,13'), '(11,13) is outside radius 3 and must be dark');
+
+  // Shape must not be a pure cross — count the diagonal (non-axis) lit cells.
+  let diagonalCount = 0;
+  for (const k of set) {
+    const [x, y] = k.split(',').map(Number);
+    if (x !== 10 && y !== 10) diagonalCount++;
+  }
+  assert.ok(diagonalCount >= 12,
+    `expected a filled disc with many diagonals, got ${diagonalCount}`);
+});
+
 test('bullseye facing east lights cells east but nothing due west', () => {
   const tok = { x: 10, y: 10, light_type: 'bullseye', light_radius: 0, facing: 2 }; // facing E
   const revealed = computeRevealed(tok, map, new Map());
