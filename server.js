@@ -44,6 +44,13 @@ app.get(['/', '/index.html'], (req, res) => {
   res.set('Cache-Control', 'no-cache');
   res.type('html').send(INDEX_HTML);
 });
+// Session deep-link. The client-side router inspects window.location on boot
+// to distinguish `/` (landing) from `/s/<id>` (session shell). Server always
+// serves the same HTML — the session-not-found case is rendered client side.
+app.get('/s/:id', (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('html').send(INDEX_HTML);
+});
 
 // Render app.js once at startup with {{LIB_VERSION}} substituted for the
 // deployed short SHA. This cache-busts the static `import` of /lib/logic.js
