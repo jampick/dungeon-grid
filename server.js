@@ -55,7 +55,11 @@ app.use(express.static(path.join(__dirname, 'public'), { index: false, maxAge: '
 // Serve lib/ as a static asset so the browser client can import the same
 // pure-logic helpers the server uses (computeRevealed, wall collision, ...).
 // The client loads app.js as a module and imports from '/lib/logic.js'.
-app.use('/lib', express.static(path.join(__dirname, 'lib'), { maxAge: '1y', immutable: true }));
+app.use('/lib', express.static(path.join(__dirname, 'lib'), {
+  setHeaders(res) {
+    res.set('Cache-Control', 'no-cache');
+  },
+}));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // --- DB ---
