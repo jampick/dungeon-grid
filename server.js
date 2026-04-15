@@ -9,7 +9,7 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { LIGHT_PRESETS, FACING_VEC, computeRevealed, rollDice, recomputeFog as recomputeFogLogic,
   canClearChat, createUndoStack, snapshotToken, restoreTokenRow, snapshotWalls, restoreWalls, snapshotMap, snapshotFog,
-  isReachable, shouldQueueLightChange, loginDm, loginPlayer, generateRandomDungeon } from './lib/logic.js';
+  isReachable, shouldQueueLightChange, loginDm, loginPlayer, generateRandomDungeon, computeMemoryTokensFromDb } from './lib/logic.js';
 import { listMaps, createMap as createMapDb, renameMap as renameMapDb, activateMap as activateMapDb, duplicateMap as duplicateMapDb, deleteMap as deleteMapDb } from './lib/maps.js';
 import { getDeploymentInfo, TRIGGER_DIR, buildTriggerFilename } from './lib/deployment.js';
 
@@ -130,6 +130,20 @@ CREATE TABLE IF NOT EXISTS walls (
   open INTEGER DEFAULT 0,
   PRIMARY KEY (map_id, cx, cy, side)
 );
+CREATE TABLE IF NOT EXISTS explored_cells (
+  map_id INTEGER,
+  cx INTEGER,
+  cy INTEGER,
+  PRIMARY KEY (map_id, cx, cy)
+);
+CREATE TABLE IF NOT EXISTS cell_memory (
+  map_id INTEGER,
+  cx INTEGER,
+  cy INTEGER,
+  token_id INTEGER,
+  snapshot TEXT,
+  PRIMARY KEY (map_id, cx, cy, token_id)
+);
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY,
   campaign_id INTEGER,
@@ -247,7 +261,15 @@ function getState() {
   const pendings = [...pendingMoves.entries()].map(([id, v]) => ({ id, ...v }));
   const doorPendings = [...pendingDoors.entries()].map(([key, v]) => ({ key, ...v }));
   const lightPendings = [...pendingLights.entries()].map(([id, v]) => ({ id, ...v }));
-  return { campaign, maps, activeMap, tokens, fog: fogRow?.data || null, walls, catalog, players, pendings, doorPendings, lightPendings, undoLabel: undoStack.topLabel(), deployment: DEPLOYMENT };
+  let explored = [];
+  let memoryTokens = [];
+  if (activeMap) {
+    explored = db.prepare('SELECT cx, cy FROM explored_cells WHERE map_id=?').all(activeMap.id).map(r => `${r.cx},${r.cy}`);
+    let fogSet = null;
+    try { fogSet = new Set(JSON.parse(fogRow?.data || '[]')); } catch { fogSet = new Set(); }
+    memoryTokens = computeMemoryTokensFromDb(db, activeMap.id, fogSet);
+  }
+  return { campaign, maps, activeMap, tokens, fog: fogRow?.data || null, walls, catalog, players, pendings, doorPendings, lightPendings, undoLabel: undoStack.topLabel(), deployment: DEPLOYMENT, explored, memoryTokens };
 }
 
 app.get('/api/state', (req, res) => {
@@ -466,9 +488,23 @@ io.on('connection', (socket) => {
     broadcastState();
   });
 
+  socket.on('memory:clear', () => {
+    if (!requireDM(socket)) return;
+    const map = getActiveMap();
+    if (!map) return;
+    db.prepare('DELETE FROM explored_cells WHERE map_id=?').run(map.id);
+    db.prepare('DELETE FROM cell_memory WHERE map_id=?').run(map.id);
+    recomputeFog(map.id);
+    broadcastState();
+  });
+
   socket.on('map:delete', ({ id }) => {
     if (!requireDM(socket)) return;
-    try { deleteMapDb(db, id); }
+    try {
+      deleteMapDb(db, id);
+      db.prepare('DELETE FROM explored_cells WHERE map_id=?').run(id);
+      db.prepare('DELETE FROM cell_memory WHERE map_id=?').run(id);
+    }
     catch (e) { socket.emit('chat:msg', { from: 'system', role: 'dm', text: `map:delete failed: ${e.message}`, ts: Date.now() }); return; }
     undoStack.clear();
     broadcastState();
