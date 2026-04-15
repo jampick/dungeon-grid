@@ -10,7 +10,7 @@ import { fileURLToPath } from 'url';
 import { LIGHT_PRESETS, FACING_VEC, computeRevealed, rollDice, recomputeFog as recomputeFogLogic,
   canClearChat, createUndoStack, snapshotToken, restoreTokenRow, snapshotWalls, restoreWalls, snapshotMap, snapshotFog,
   isReachable, pathCost, shouldQueueLightChange, loginDm, loginPlayer, generateRandomDungeon, computeMemoryTokensFromDb,
-  computeActivePlayerIds, reassignOwnedTokensToNull } from './lib/logic.js';
+  computeActivePlayerIds, reassignOwnedTokensToNull, computeFollowerTargets } from './lib/logic.js';
 import { getObjectById } from './lib/objects.js';
 import { sizeMultiplier } from './lib/creatures.js';
 import { listMaps, createMap as createMapDb, renameMap as renameMapDb, activateMap as activateMapDb, duplicateMap as duplicateMapDb, deleteMap as deleteMapDb, performTravel, nullLinksToMap } from './lib/maps.js';
@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS campaigns (
   door_approval INTEGER DEFAULT 1,
   light_approval INTEGER DEFAULT 1,
   show_other_hp INTEGER DEFAULT 0,
+  party_leader_id INTEGER,
   created_at INTEGER
 );
 CREATE TABLE IF NOT EXISTS maps (
@@ -187,6 +188,7 @@ for (const stmt of [
   "ALTER TABLE tokens ADD COLUMN link_map_id INTEGER",
   "ALTER TABLE tokens ADD COLUMN link_x INTEGER",
   "ALTER TABLE tokens ADD COLUMN link_y INTEGER",
+  "ALTER TABLE campaigns ADD COLUMN party_leader_id INTEGER",
 ]) { try { db.exec(stmt); } catch {} }
 
 // Light presets / FACING_VEC / computeRevealed now live in lib/logic.js.
@@ -641,7 +643,7 @@ io.on('connection', (socket) => {
   socket.on('campaign:settings', (data) => {
     if (!requireDM(socket)) return;
     const c = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
-    const fields = ['ruleset','approval_mode','door_approval','light_approval','show_other_hp','name'];
+    const fields = ['ruleset','approval_mode','door_approval','light_approval','show_other_hp','name','party_leader_id'];
     const sets = [], vals = [];
     for (const f of fields) if (f in data) { sets.push(`${f}=?`); vals.push(data[f]); }
     if (!sets.length) return;
@@ -947,7 +949,100 @@ io.on('connection', (socket) => {
     pendingMoves.delete(tokenId);
     if (approved) {
       db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(pending.toX, pending.toY, tokenId);
+      io.emit('token:update', { id: tokenId, x: pending.toX, y: pending.toY });
       autoRevealForToken(tokenId);
+      // Apply queued formation followers atomically with the leader move.
+      if (Array.isArray(pending.followerMoves)) {
+        for (const fm of pending.followerMoves) {
+          db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(fm.targetX, fm.targetY, fm.tokenId);
+          io.emit('token:update', { id: fm.tokenId, x: fm.targetX, y: fm.targetY });
+          autoRevealForToken(fm.tokenId);
+        }
+      }
+    }
+    broadcastState();
+  });
+
+  // --- Party formation follow ---------------------------------------------
+  // Sent immediately after the leader's token:move. The client provides the
+  // snapshot of every other PC's position at the moment of drag start so the
+  // server can authoritatively recompute follower targets (we don't trust the
+  // client's targets — only the snapshot of starting positions).
+  // In approval mode for a non-DM, the leader's pending move was already
+  // queued by token:move; we look it up and attach the follower plan so a
+  // single approval applies the whole formation atomically.
+  socket.on('party:follow', ({ leaderId, leaderFromX, leaderFromY, followers }) => {
+    const leader = db.prepare('SELECT * FROM tokens WHERE id=?').get(leaderId);
+    if (!leader) return;
+    const campaign = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
+    if (campaign.party_leader_id !== leaderId) return;
+    if (me.role !== 'dm' && leader.owner_id !== me.id) return;
+    const map = db.prepare('SELECT * FROM maps WHERE id=?').get(leader.map_id);
+    if (!map) return;
+    const wallRows = db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(leader.map_id);
+    const wallSet = new Map(wallRows.map(w => [`${w.cx},${w.cy},${w.side}`, w]));
+    // Filter follower snapshot: must be PC, on this map, not the leader,
+    // currently exists. The client sends {id,x,y} from the moment of drag.
+    const followerList = [];
+    for (const f of (followers || [])) {
+      const row = db.prepare('SELECT * FROM tokens WHERE id=?').get(f.id);
+      if (!row) continue;
+      if (row.kind !== 'pc') continue;
+      if (row.map_id !== leader.map_id) continue;
+      if (row.id === leaderId) continue;
+      followerList.push({ id: row.id, x: f.x, y: f.y });
+    }
+    // Determine the leader's authoritative new position. In approval mode for
+    // a non-DM, the leader move is in pendingMoves; otherwise it's already
+    // committed in the tokens table.
+    let newX, newY, oldX, oldY;
+    const pending = pendingMoves.get(leaderId);
+    if (pending) {
+      newX = pending.toX; newY = pending.toY;
+      oldX = pending.fromX; oldY = pending.fromY;
+    } else {
+      newX = leader.x; newY = leader.y;
+      oldX = Number.isFinite(leaderFromX) ? leaderFromX : leader.x;
+      oldY = Number.isFinite(leaderFromY) ? leaderFromY : leader.y;
+    }
+    if (oldX === newX && oldY === newY) return;
+    const followerMoves = computeFollowerTargets(
+      { x: oldX, y: oldY },
+      followerList,
+      newX, newY,
+      wallSet,
+      map,
+    );
+    if (pending) {
+      // Single approval covers leader + entire formation.
+      pending.followerMoves = followerMoves;
+      pendingMoves.set(leaderId, pending);
+      broadcastState();
+      return;
+    }
+    // Direct apply — capture undo as one combined entry.
+    const beforeRows = followerMoves.map(fm => {
+      const r = db.prepare('SELECT id, x, y FROM tokens WHERE id=?').get(fm.tokenId);
+      return r ? { id: r.id, x: r.x, y: r.y } : null;
+    }).filter(Boolean);
+    if (me.role === 'dm') {
+      pushUndo({
+        kind: 'party:follow',
+        label: 'Formation move',
+        inverse: () => {
+          for (const r of beforeRows) {
+            db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(r.x, r.y, r.id);
+            io.emit('token:update', { id: r.id, x: r.x, y: r.y });
+            autoRevealForToken(r.id);
+          }
+          broadcastState();
+        },
+      });
+    }
+    for (const fm of followerMoves) {
+      db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(fm.targetX, fm.targetY, fm.tokenId);
+      io.emit('token:update', { id: fm.tokenId, x: fm.targetX, y: fm.targetY });
+      autoRevealForToken(fm.tokenId);
     }
     broadcastState();
   });

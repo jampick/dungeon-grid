@@ -173,6 +173,7 @@ function applyState() {
   $('lightApproval').checked = !!state.campaign.light_approval;
   $('showOtherHp').checked = !!state.campaign.show_other_hp;
   $('ruleset').value = state.campaign.ruleset || '1e';
+  renderPartyLeaderSelect();
   loadFog(state.fog);
   loadExplored(state.explored || []);
   loadMemoryTokens(state.memoryTokens || []);
@@ -1387,6 +1388,18 @@ canvas.addEventListener('mousedown', (e) => {
     // drag can "slide" the token instead of teleporting it through walls.
     // DM drags skip the wall check (same as the server), so lastValid is
     // only used for players but we always initialize it for symmetry.
+    // Party-leader formation: if the chosen token IS the campaign's party
+    // leader and the dragger is allowed to move them (DM or owner), capture
+    // a snapshot of every other PC's current position. The server will use
+    // the snapshot to recompute follower offsets at apply time.
+    let followerSnapshot = null;
+    const leaderId = state.campaign?.party_leader_id ?? null;
+    if (leaderId && chosen.id === leaderId
+        && (auth.role === 'dm' || chosen.owner_id === me.playerId)) {
+      followerSnapshot = state.tokens
+        .filter(t => t.kind === 'pc' && t.id !== chosen.id)
+        .map(t => ({ id: t.id, x: t.x, y: t.y }));
+    }
     dragging = {
       mode: 'token',
       id: chosen.id,
@@ -1395,6 +1408,7 @@ canvas.addEventListener('mousedown', (e) => {
       lastValidX: chosen.x,
       lastValidY: chosen.y,
       moveBudget: Number.isFinite(chosen.move) ? chosen.move : 6,
+      followerSnapshot,
     };
     selectedTokenId = chosen.id;
     renderTokenList();
@@ -1518,6 +1532,17 @@ canvas.addEventListener('mouseup', () => {
       previewFogCells = null;
       draw();
       socket.emit('token:move', { id: dragging.id, x: targetX, y: targetY });
+      // If the leader actually moved, ask the server to apply formation
+      // followers atomically (or attach them to the pending approval).
+      if (dragging.followerSnapshot && dragging.followerSnapshot.length
+          && (targetX !== dragging.origX || targetY !== dragging.origY)) {
+        socket.emit('party:follow', {
+          leaderId: dragging.id,
+          leaderFromX: dragging.origX,
+          leaderFromY: dragging.origY,
+          followers: dragging.followerSnapshot,
+        });
+      }
     }
   }
   if (dragging?.mode === 'room' && roomDrag) {
@@ -1646,6 +1671,21 @@ $('doorApproval').onchange = () => socket.emit('campaign:settings', { door_appro
 $('lightApproval').onchange = () => socket.emit('campaign:settings', { light_approval: $('lightApproval').checked ? 1 : 0 });
 $('showOtherHp').onchange = () => socket.emit('campaign:settings', { show_other_hp: $('showOtherHp').checked ? 1 : 0 });
 $('ruleset').onchange = () => socket.emit('campaign:settings', { ruleset: $('ruleset').value });
+function renderPartyLeaderSelect() {
+  const sel = $('partyLeader');
+  if (!sel) return;
+  const pcs = (state.tokens || []).filter(t => t.kind === 'pc');
+  const cur = state.campaign?.party_leader_id ?? '';
+  // Rebuild options
+  sel.innerHTML = '<option value="">(none)</option>' + pcs.map(t =>
+    `<option value="${t.id}">${(t.name || 'PC').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]))}</option>`
+  ).join('');
+  sel.value = cur ? String(cur) : '';
+}
+$('partyLeader').onchange = () => {
+  const v = $('partyLeader').value;
+  socket.emit('campaign:settings', { party_leader_id: v ? Number(v) : null });
+};
 
 // ---- Token dialog ----
 const dlg = $('tokenDialog');
