@@ -3,6 +3,7 @@
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
 import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, stackOffsets } from '/lib/logic.js?v={{LIB_VERSION}}';
+import { getCreatures } from '/lib/creatures.js?v={{LIB_VERSION}}';
 
 const $ = (id) => document.getElementById(id);
 const loginEl = $('login'), appEl = $('app');
@@ -1214,7 +1215,43 @@ $('ruleset').onchange = () => socket.emit('campaign:settings', { ruleset: $('rul
 
 // ---- Token dialog ----
 const dlg = $('tokenDialog');
+let pendingPresetImage = null;
 $('addToken').onclick = () => openTokenDialog(null);
+function populatePresetList(kind) {
+  const sel = $('tkPreset');
+  sel.innerHTML = '<option value="">(none — manual)</option>';
+  if (kind !== 'monster' && kind !== 'npc') return;
+  const ruleset = state?.campaign?.ruleset || '1e';
+  const list = getCreatures(ruleset, kind);
+  for (const c of list) {
+    const opt = document.createElement('option');
+    opt.value = c.id;
+    opt.textContent = c.name;
+    sel.appendChild(opt);
+  }
+  sel.value = '';
+}
+function refreshPresetRow() {
+  const kind = $('tkKind').value;
+  const show = (kind === 'monster' || kind === 'npc');
+  $('tkPresetRow').style.display = show ? '' : 'none';
+  populatePresetList(kind);
+}
+function setPreviewSrc(imgEl, src) {
+  if (src) {
+    imgEl.src = src;
+    imgEl.style.display = '';
+  } else {
+    imgEl.removeAttribute('src');
+    imgEl.style.display = 'none';
+  }
+}
+function resetTokenImagePreview(currentSrc) {
+  pendingPresetImage = null;
+  setPreviewSrc($('tkImgCurrent'), currentSrc || '');
+  setPreviewSrc($('tkImgPreview'), '');
+  try { $('tkImage').value = ''; } catch {}
+}
 function openTokenDialog(id) {
   editingTokenId = id;
   const t = id ? state.tokens.find(t => t.id === id) : null;
@@ -1229,9 +1266,35 @@ function openTokenDialog(id) {
   $('tkColor').value = t?.color || '#2a2a2a';
   $('tkOwner').value = t?.owner_id || '';
   $('tkDelete').style.display = id && auth.role === 'dm' ? '' : 'none';
+  resetTokenImagePreview(t?.image || '');
+  refreshPresetRow();
   dlg.showModal();
 }
-$('tkCancel').onclick = () => dlg.close();
+$('tkKind').onchange = () => { refreshPresetRow(); };
+$('tkPreset').onchange = () => {
+  const id = $('tkPreset').value;
+  if (!id) return;
+  const kind = $('tkKind').value;
+  const ruleset = state?.campaign?.ruleset || '1e';
+  const list = getCreatures(ruleset, kind);
+  const preset = list.find(c => c.id === id);
+  if (!preset) return;
+  $('tkName').value = preset.name;
+  $('tkHp').value = preset.hp;
+  $('tkHpMax').value = preset.hp;
+  $('tkAc').value = preset.ac;
+  $('tkColor').value = preset.color;
+  pendingPresetImage = preset.image;
+  setPreviewSrc($('tkImgPreview'), preset.image);
+};
+$('tkImage').onchange = () => {
+  const file = $('tkImage').files[0];
+  if (!file) { setPreviewSrc($('tkImgPreview'), pendingPresetImage || ''); return; }
+  const reader = new FileReader();
+  reader.onload = () => setPreviewSrc($('tkImgPreview'), reader.result);
+  reader.readAsDataURL(file);
+};
+$('tkCancel').onclick = () => { resetTokenImagePreview(''); dlg.close(); };
 $('tkSave').onclick = async () => {
   const data = {
     name: $('tkName').value || '?',
@@ -1250,6 +1313,8 @@ $('tkSave').onclick = async () => {
     const fd = new FormData(); fd.append('file', file);
     const res = await fetch('/api/upload', { method: 'POST', body: fd, headers: { 'x-player-token': auth.token } });
     data.image = (await res.json()).url;
+  } else if (pendingPresetImage) {
+    data.image = pendingPresetImage;
   }
   if (editingTokenId) {
     data.id = editingTokenId;
@@ -1257,6 +1322,7 @@ $('tkSave').onclick = async () => {
   } else {
     socket.emit('token:create', data);
   }
+  pendingPresetImage = null;
   dlg.close();
 };
 $('tkDelete').onclick = () => {

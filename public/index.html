@@ -148,6 +148,11 @@
         <option value="object">Object</option>
       </select>
     </label>
+    <label id="tkPresetRow" style="display:none">Preset
+      <select id="tkPreset">
+        <option value="">(none — manual)</option>
+      </select>
+    </label>
     <label>HP <input id="tkHp" type="number" value="10" /> / <input id="tkHpMax" type="number" value="10" /></label>
     <label>AC <input id="tkAc" type="number" value="10" /></label>
     <label>Light source (1e)
@@ -176,6 +181,12 @@
       <select id="tkOwner"><option value="">(none)</option></select>
     </label>
     <label>Image <input id="tkImage" type="file" accept="image/*" /></label>
+    <div class="token-image-preview">
+      <span class="label">Current:</span>
+      <img id="tkImgCurrent" src="" alt="current" />
+      <span class="label">New:</span>
+      <img id="tkImgPreview" src="" alt="preview" />
+    </div>
     <menu>
       <button id="tkCancel" type="button">Cancel</button>
       <button id="tkSave" type="button">Save</button>
