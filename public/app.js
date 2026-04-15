@@ -1,4 +1,9 @@
 // Dungeon Grid client
+// Loaded as an ES module (<script type="module">) so we can import the same
+// pure-logic helpers the server uses. Keeps one source of truth for wall
+// collision and light/fog BFS across both sides.
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked } from '/lib/logic.js';
+
 const $ = (id) => document.getElementById(id);
 const loginEl = $('login'), appEl = $('app');
 
@@ -10,22 +15,16 @@ let editingTokenId = null;
 let selectedTokenId = null;
 let dragging = null;
 let view = { scale: 1, ox: 0, oy: 0 };
-const LIGHT_PRESETS = {
-  none:        { radius: 0,  cone: false },
-  candle:      { radius: 2,  cone: false },
-  torch:       { radius: 3,  cone: false },
-  lantern:     { radius: 6,  cone: false },
-  bullseye:    { radius: 12, cone: true  },
-  light_spell: { radius: 4,  cone: false },
-  continual:   { radius: 12, cone: false },
-  infravision: { radius: 12, cone: false },
-};
 const FACING_RAD = [
   -Math.PI/2, -Math.PI/4, 0, Math.PI/4, Math.PI/2, 3*Math.PI/4, Math.PI, -3*Math.PI/4
 ];
 
 let fogMode = null; // 'reveal' | 'hide' | null
 let fogCells = new Set();
+// While a token is being dragged, we compute fog client-side so the light
+// glides with the cursor instead of teleporting on mouseup. Null means "use
+// the server's authoritative fogCells". Reset on mouseup and on fog:state.
+let previewFogCells = null;
 let wallMode = null; // 'edge' | 'room' | null
 let walls = new Map(); // "cx,cy,side" -> { kind, open }
 let roomDrag = null; // {x1,y1,x2,y2}
@@ -436,6 +435,31 @@ function screenToWorld(x, y) {
   return { x: (x - view.ox) / view.scale, y: (y - view.oy) / view.scale };
 }
 
+// Recompute fog client-side from the current token positions, using the same
+// BFS that the server uses (computeRevealed in lib/logic.js). This is called
+// during token drags so the light glides with the cursor. The server stays
+// authoritative — on mouseup we emit token:move and the server recomputes
+// and broadcasts the real fog:state, which clears the preview.
+function recomputePreviewFog() {
+  if (!state?.activeMap) { previewFogCells = null; return; }
+  const m = state.activeMap;
+  const lit = new Set();
+  for (const t of state.tokens) {
+    const isParty = t.kind === 'pc' || t.owner_id != null;
+    if (!isParty) continue;
+    // walls is a Map<string, {kind, open}> already in the right shape.
+    for (const key of computeRevealed(t, m, walls)) lit.add(key);
+  }
+  const fog = new Set();
+  for (let x = 0; x < m.width; x++) {
+    for (let y = 0; y < m.height; y++) {
+      const k = `${x},${y}`;
+      if (!lit.has(k)) fog.add(k);
+    }
+  }
+  previewFogCells = fog;
+}
+
 let bgImg = null;
 let bgUrl = null;
 function ensureBg() {
@@ -454,6 +478,10 @@ function draw() {
   const size = m.grid_size;
   const W = m.width * size;
   const H = m.height * size;
+  // Use the client-side preview fog while dragging a lit token, otherwise
+  // the server's authoritative fog. Every fog read in draw() must go
+  // through this local alias so the light flows with the cursor.
+  const displayFog = previewFogCells || fogCells;
 
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
@@ -476,7 +504,7 @@ function draw() {
   else drawHexGrid(m.width, m.height, size);
 
   const isDM = auth.role === 'dm';
-  const cellVisible = (x, y) => !fogCells.has(`${x},${y}`);
+  const cellVisible = (x, y) => !displayFog.has(`${x},${y}`);
   const tokenVisibleToMe = (t) => isDM || (t.owner_id && t.owner_id === me.playerId) || cellVisible(t.x, t.y);
 
   // fog overlay — rounded-light version (two-pass per-light clip).
@@ -494,7 +522,7 @@ function draw() {
   // warm radial "firelight" fill, so that in dark mode (where the revealed
   // --paper is near black) the lit area actually looks lit. This replaces
   // the old separate "soft glow" pass that ran before the fog.
-  if (fogCells.size) {
+  if (displayFog.size) {
     ctx.save();
     ctx.fillStyle = isDM ? themeColors.fogDm : themeColors.fogPlayer;
     ctx.fillRect(0, 0, W, H);
@@ -524,7 +552,7 @@ function draw() {
     ctx.beginPath();
     for (let vx = info.minX; vx <= info.maxX; vx++) {
       for (let vy = info.minY; vy <= info.maxY; vy++) {
-        if (fogCells.has(`${vx},${vy}`)) continue;
+        if (displayFog.has(`${vx},${vy}`)) continue;
         ctx.rect(vx * size, vy * size, size, size);
       }
     }
@@ -557,7 +585,7 @@ function draw() {
     }
 
     // Pass 1: carve the fog hole with a flat destination-out fill.
-    if (fogCells.size) {
+    if (displayFog.size) {
       ctx.save();
       applyLightClip(info);
       ctx.globalCompositeOperation = 'destination-out';
@@ -832,7 +860,18 @@ canvas.addEventListener('mousedown', (e) => {
     const r = size * 0.42 * (t.size || 1);
     if ((w.x - cx)**2 + (w.y - cy)**2 <= r*r) {
       if (auth.role !== 'dm' && t.owner_id !== me.playerId) return;
-      dragging = { mode: 'token', id: t.id, origX: t.x, origY: t.y };
+      // Track the last unblocked cell so that wall collisions during the
+      // drag can "slide" the token instead of teleporting it through walls.
+      // DM drags skip the wall check (same as the server), so lastValid is
+      // only used for players but we always initialize it for symmetry.
+      dragging = {
+        mode: 'token',
+        id: t.id,
+        origX: t.x,
+        origY: t.y,
+        lastValidX: t.x,
+        lastValidY: t.y,
+      };
       selectedTokenId = t.id;
       return;
     }
@@ -875,11 +914,37 @@ canvas.addEventListener('mousemove', (e) => {
     draw();
   } else if (dragging.mode === 'token') {
     const w = screenToWorld(sx, sy);
-    const size = state.activeMap.grid_size;
+    const m = state.activeMap;
+    const size = m.grid_size;
     const t = state.tokens.find(t => t.id === dragging.id);
     if (t) {
-      t.x = Math.floor(w.x / size);
-      t.y = Math.floor(w.y / size);
+      const targetX = Math.max(0, Math.min(m.width  - 1, Math.floor(w.x / size)));
+      const targetY = Math.max(0, Math.min(m.height - 1, Math.floor(w.y / size)));
+      if (auth.role === 'dm') {
+        // DM moves freely — same bypass the server uses.
+        t.x = targetX;
+        t.y = targetY;
+        dragging.lastValidX = targetX;
+        dragging.lastValidY = targetY;
+      } else {
+        // Players slide along walls. Bresenham-walk from the last unblocked
+        // cell toward the cursor, stopping at the first blocked edge. This
+        // matches the server's BFS wall rule (cardinals via isBlocked and
+        // diagonals requiring both orthogonals open).
+        const { x: nx, y: ny } = walkUntilBlocked(
+          dragging.lastValidX, dragging.lastValidY,
+          targetX, targetY,
+          walls,
+        );
+        dragging.lastValidX = nx;
+        dragging.lastValidY = ny;
+        t.x = nx;
+        t.y = ny;
+      }
+      // Live light/fog preview: only meaningful for party lights, but cheap
+      // to recompute unconditionally. The server re-broadcasts authoritative
+      // fog on mouseup and clears the preview then.
+      recomputePreviewFog();
       draw();
     }
   }
@@ -895,12 +960,20 @@ canvas.addEventListener('mouseup', () => {
   if (dragging?.mode === 'token') {
     const t = state.tokens.find(t => t.id === dragging.id);
     if (t) {
-      const targetX = t.x, targetY = t.y;
+      // lastValidX/Y is what the collision walker settled on; it equals the
+      // raw cursor cell for DMs and the last unblocked cell for players.
+      // Approval queue gets the same collided destination, not the raw mouse
+      // target, so players can't propose impossible moves.
+      const targetX = dragging.lastValidX;
+      const targetY = dragging.lastValidY;
       // In approval mode, snap back to original until DM resolves
       if (state.campaign.approval_mode && auth.role !== 'dm') {
         t.x = dragging.origX; t.y = dragging.origY;
-        draw();
       }
+      // Drop the client-side fog preview — the server will broadcast the
+      // authoritative fog:state in response to this move.
+      previewFogCells = null;
+      draw();
       socket.emit('token:move', { id: dragging.id, x: targetX, y: targetY });
     }
   }
@@ -1069,6 +1142,8 @@ function pushFog() {
 }
 function loadFog(data) {
   try { fogCells = new Set(JSON.parse(data || '[]')); } catch { fogCells = new Set(); }
+  // Any authoritative fog from the server trumps the drag-time preview.
+  previewFogCells = null;
 }
 function loadWalls(list) {
   walls = new Map(list.map(w => [`${w.cx},${w.cy},${w.side}`, { kind: w.kind || 'wall', open: !!w.open }]));
