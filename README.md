@@ -198,9 +198,13 @@ Express serves static files and upload endpoints; Socket.IO carries the realtime
 - **Wall occlusion is cell-edge only.** No raycasting against arbitrary line segments; walls live on grid lines.
 - **Approval-mode pending moves are not on the DM undo stack.** They use a separate queue.
 
+## Roadmap
+
+See [`docs/roadmap.md`](docs/roadmap.md) for design notes on future work.
+
 ## Contributing / workflow
 
-This project uses branch-per-feature with test-gated merges. Conventions, data model notes, and the deferred session-refactor brief live in [`docs/HANDOFF.md`](docs/HANDOFF.md).
+This project uses branch-per-feature with test-gated merges.
 
 ## License
 
