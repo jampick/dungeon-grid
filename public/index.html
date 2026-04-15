@@ -7,11 +7,30 @@
 <link rel="stylesheet" href="/style.css?v={{VERSION}}" />
 </head>
 <body>
-<div id="login" class="panel">
+<div id="landing" class="panel hidden">
   <h1>Dungeon Grid</h1>
+  <p class="sub">pick a session to join, or create your own</p>
+  <div class="row"><button id="btnResumeSession" class="hidden">Resume last session</button></div>
+  <div id="sessionList"></div>
+  <hr/>
+  <h3>Create a new session</h3>
+  <form id="createSessionForm">
+    <div class="row"><input id="newSessionName" placeholder="Session name" required /></div>
+    <div class="row"><input id="newSessionJoinPw" type="password" placeholder="Player join password (optional)" /></div>
+    <div class="row"><input id="newSessionDmPw" type="password" placeholder="DM password (required)" required /></div>
+    <div class="row"><button type="submit">Create session</button></div>
+    <p id="createErr" class="err"></p>
+  </form>
+</div>
+
+<div id="login" class="panel hidden">
+  <h1 id="loginSessionName">Dungeon Grid</h1>
   <p class="sub">pencil &amp; paper, over the wire</p>
   <div class="row">
     <input id="name" placeholder="Your name" />
+  </div>
+  <div class="row joinpw-row hidden">
+    <input id="joinpass" type="password" placeholder="Session password" />
   </div>
   <div class="row">
     <input id="dmpass" type="password" placeholder="DM password (DM only)" />
@@ -21,6 +40,13 @@
     <button id="btnPlayer">Join as Player</button>
   </div>
   <p id="loginErr" class="err"></p>
+  <p class="row"><a href="/" id="backToLanding">&larr; back to all sessions</a></p>
+</div>
+
+<div id="notFound" class="panel hidden">
+  <h1>Session not found</h1>
+  <p class="sub">That session doesn't exist (or has been deleted).</p>
+  <p><a href="/">&larr; back to all sessions</a></p>
 </div>
 
 <div id="app" class="hidden">
@@ -126,6 +152,8 @@
 
   <main>
     <div id="toolbar">
+      <span id="sessionLabel" class="session-label"></span>
+      <select id="sessionSwitcher" class="hidden" title="Switch session"></select>
       <span id="mapName"></span>
       <span class="spacer"></span>
       <span id="panLockHint" title="Map is locked against accidental panning. Hold Shift and drag (or use middle / right mouse button) to pan.">&#x1F512; Shift+drag to pan</span>

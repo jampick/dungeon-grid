@@ -52,15 +52,36 @@ body {
 .sub { color: var(--ink-soft); font-style: italic; }
 
 /* Login */
-#login {
-  max-width: 360px;
+#login, #landing, #notFound {
+  max-width: 480px;
   margin: 8vh auto;
   padding: 24px;
   border: 1px solid var(--ink);
   background: var(--paper);
   box-shadow: 3px 3px 0 rgba(0,0,0,.15);
 }
-#login h1 { margin: 0; font-variant: small-caps; letter-spacing: 2px; }
+#login h1, #landing h1, #notFound h1 { margin: 0; font-variant: small-caps; letter-spacing: 2px; }
+#sessionList { margin: 12px 0; display: flex; flex-direction: column; gap: 6px; }
+.session-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--ink);
+  background: var(--paper);
+  cursor: pointer;
+}
+.session-row:hover { background: var(--paper-dark); }
+.session-row .session-name { flex: 1; font-weight: bold; }
+.session-row .session-meta { color: var(--ink-soft); font-size: 0.85em; }
+.session-row .session-lock { margin-left: 4px; }
+.session-label {
+  font-variant: small-caps;
+  letter-spacing: 1px;
+  margin-right: 10px;
+  color: var(--ink-soft);
+}
+#sessionSwitcher { margin-right: 8px; }
 .panel .row { margin: 10px 0; display: flex; gap: 8px; }
 .panel input, .panel button, .panel select {
   font: inherit; padding: 8px 10px;
