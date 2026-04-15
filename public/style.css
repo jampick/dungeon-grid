@@ -167,3 +167,71 @@ body.player .dm-only { display: none; }
 .map-row.active { font-weight: bold; }
 .map-row .map-name { flex: 1; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .map-row button { font-size: 11px; padding: 2px 5px; }
+
+/* Help overlay */
+.help-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  display: flex; align-items: center; justify-content: center;
+}
+.help-backdrop {
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,.45);
+}
+.help-panel {
+  position: relative;
+  background: var(--paper);
+  color: var(--ink);
+  border: 2px solid var(--ink);
+  box-shadow: 4px 4px 0 rgba(0,0,0,.25);
+  max-width: 720px;
+  width: calc(100% - 48px);
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+  padding: 20px 24px 16px;
+  font-family: inherit;
+}
+.help-panel h2 {
+  margin: 0 0 4px;
+  font-variant: small-caps;
+  letter-spacing: 2px;
+  border-bottom: 1px solid var(--ink);
+  padding-bottom: 6px;
+}
+.help-intro { font-style: italic; color: var(--ink-soft); margin: 6px 0 14px; }
+.help-section { margin: 14px 0; }
+.help-section h3 {
+  margin: 0 0 4px;
+  font-variant: small-caps;
+  letter-spacing: 1px;
+  font-weight: normal;
+  border-bottom: 1px dashed var(--ink-soft);
+  color: var(--accent);
+}
+.help-section p { margin: 4px 0; line-height: 1.45; }
+.help-section code {
+  background: rgba(0,0,0,.06);
+  padding: 1px 4px;
+  border-radius: 2px;
+  font-family: "Consolas", "Menlo", monospace;
+  font-size: 13px;
+}
+.help-close {
+  position: absolute; top: 6px; right: 10px;
+  background: transparent; border: none;
+  font-size: 24px; line-height: 1; cursor: pointer;
+  color: var(--ink);
+}
+.help-close:hover { color: var(--accent); }
+.help-hide-again {
+  display: block;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px solid var(--ink-soft);
+  font-size: 13px;
+  color: var(--ink-soft);
+}
+#btnHelp {
+  font-weight: bold;
+  min-width: 28px;
+}
+body.player .help-section.dm-only { display: none; }
