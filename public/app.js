@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, cacheBustedImageUrl, lightClipRadiusPx, hasLineOfSight } from '/lib/logic.js?v={{LIB_VERSION}}';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, cacheBustedImageUrl, lightClipRadiusPx, hasLineOfSight, findCopyOffset } from '/lib/logic.js?v={{LIB_VERSION}}';
 import { getCreatures, SIZE_MULTIPLIERS, sizeMultiplier } from '/lib/creatures.js?v={{LIB_VERSION}}';
 import { getObjects } from '/lib/objects.js?v={{LIB_VERSION}}';
 import { getSpells } from '/lib/spells.js?v={{LIB_VERSION}}';
@@ -1673,6 +1673,7 @@ function openTokenDialog(id) {
   $('tkMove').value = t?.move ?? 6;
   if ($('tkSize')) $('tkSize').value = categoryForMultiplier(t?.size ?? 1);
   $('tkDelete').style.display = id && auth.role === 'dm' ? '' : 'none';
+  $('tkCopy').style.display = id && auth.role === 'dm' ? '' : 'none';
   resetTokenImagePreview(t?.image || '');
   // Re-hydrate any stored AOE shape config so an existing effect token
   // round-trips its shape if the user edits it without picking a preset.
@@ -1788,6 +1789,25 @@ $('tkSave').onclick = async () => {
 };
 $('tkDelete').onclick = () => {
   if (editingTokenId) socket.emit('token:delete', { id: editingTokenId });
+  dlg.close();
+};
+$('tkCopy').onclick = () => {
+  if (!editingTokenId) return;
+  const t = state.tokens.find(x => x.id === editingTokenId);
+  if (!t) return;
+  const m = state.activeMap;
+  if (!m) return;
+  const occupied = new Set(state.tokens.map(x => `${x.x},${x.y}`));
+  const { x, y } = findCopyOffset(t.x, t.y, occupied, m.width, m.height);
+  const copy = {
+    kind: t.kind, name: t.name,
+    hp_current: t.hp_current, hp_max: t.hp_max, ac: t.ac,
+    color: t.color, image: t.image, size: t.size, race: t.race,
+    move: t.move, light_type: t.light_type, light_radius: t.light_radius,
+    facing: t.facing, owner_id: t.owner_id, aoe: t.aoe,
+    x, y,
+  };
+  socket.emit('token:create', copy);
   dlg.close();
 };
 
