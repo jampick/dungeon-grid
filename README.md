@@ -219,7 +219,7 @@ Express serves static files and upload endpoints; Socket.IO carries the realtime
 - **Infravision is modeled as a regular 60 ft light source.** 1e infravision is darkness-only and heat-based; the simplification is intentional.
 - **Wall occlusion is cell-edge only.** No raycasting against arbitrary line segments; walls live on grid lines.
 - **Approval-mode pending moves are not on the DM undo stack.** They use a separate queue.
-- **Catalog art is placeholder.** Creature, object, and spell-effect catalogs ship with auto-generated SVG placeholders. A future `feat-game-icons` branch will swap in CC BY 3.0 icons from game-icons.net.
+- **A handful of catalog entries are still placeholders.** Most creature, object, and spell icons are now CC BY 3.0 icons from [game-icons.net](https://game-icons.net/) (see [CREDITS.md](CREDITS.md)); the few entries without a good semantic match still use auto-generated letter-in-circle SVGs.
 
 ## Roadmap
 
@@ -228,6 +228,10 @@ See [`docs/roadmap.md`](docs/roadmap.md) for design notes on future work.
 ## Contributing / workflow
 
 This project uses branch-per-feature with test-gated merges.
+
+## Credits
+
+Creature, object, and spell icons are from [game-icons.net](https://game-icons.net/) under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/). See [CREDITS.md](CREDITS.md) for per-icon attribution.
 
 ## License
 

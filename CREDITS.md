@@ -1,0 +1,68 @@
+# Credits
+
+## Icons
+
+Icons under `public/creatures/` are from [game-icons.net](https://game-icons.net/) by various contributors, licensed under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/). Unmodified from originals.
+
+- `altar.svg` — "Sword Altar" by Delapouite — https://game-icons.net/1x1/delapouite/sword-altar.html
+- `anvil.svg` — "Anvil" by Lorc — https://game-icons.net/1x1/lorc/anvil.html
+- `bandit.svg` — "Bandit" by Delapouite — https://game-icons.net/1x1/delapouite/bandit.html
+- `barrel.svg` — "Barrel" by Delapouite — https://game-icons.net/1x1/delapouite/barrel.html
+- `bed.svg` — "Bed" by Delapouite — https://game-icons.net/1x1/delapouite/bed.html
+- `bookshelf.svg` — "Bookshelf" by Delapouite — https://game-icons.net/1x1/delapouite/bookshelf.html
+- `brown_bear.svg` — "Bear Head" by Delapouite — https://game-icons.net/1x1/delapouite/bear-head.html
+- `campfire.svg` — "Campfire" by Lorc — https://game-icons.net/1x1/lorc/campfire.html
+- `candle_lit.svg` — "Candle Light" by Lorc — https://game-icons.net/1x1/lorc/candle-light.html
+- `chair.svg` — "Wooden Chair" by Delapouite — https://game-icons.net/1x1/delapouite/wooden-chair.html
+- `chest.svg` — "Chest" by Delapouite — https://game-icons.net/1x1/delapouite/chest.html
+- `city_watch.svg` — "Crested Helmet" by Lorc — https://game-icons.net/1x1/lorc/crested-helmet.html
+- `commoner.svg` — "Person" by Delapouite — https://game-icons.net/1x1/delapouite/person.html
+- `crate.svg` — "Wooden Crate" by Delapouite — https://game-icons.net/1x1/delapouite/wooden-crate.html
+- `desk.svg` — "Desk" by Delapouite — https://game-icons.net/1x1/delapouite/desk.html
+- `dire_wolf.svg` — "Wolf Howl" by Lorc — https://game-icons.net/1x1/lorc/wolf-howl.html
+- `firepit.svg` — "Campfire" by Lorc — https://game-icons.net/1x1/lorc/campfire.html
+- `fountain.svg` — "Fountain" by Lorc — https://game-icons.net/1x1/lorc/fountain.html
+- `ghoul.svg` — "Carrion" by Lorc — https://game-icons.net/1x1/lorc/carrion.html
+- `giant_rat.svg` — "Rat" by Delapouite — https://game-icons.net/1x1/delapouite/rat.html
+- `giant_spider.svg` — "Spider Alt" by Carl Olsen — https://game-icons.net/1x1/carl-olsen/spider-alt.html
+- `gnoll.svg` — "Hyena Head" by Caro Asercion — https://game-icons.net/1x1/caro-asercion/hyena-head.html
+- `goblin.svg` — "Goblin Head" by Delapouite — https://game-icons.net/1x1/delapouite/goblin-head.html
+- `guard.svg` — "Spartan Helmet" by Delapouite — https://game-icons.net/1x1/delapouite/spartan-helmet.html
+- `hill_giant.svg` — "Giant" by Delapouite — https://game-icons.net/1x1/delapouite/giant.html
+- `hobgoblin.svg` — "Evil Minion" by Lorc — https://game-icons.net/1x1/lorc/evil-minion.html
+- `lantern.svg` — "Lantern Flame" by Lorc — https://game-icons.net/1x1/lorc/lantern-flame.html
+- `light_orb.svg` — "Light Bulb" by Lorc — https://game-icons.net/1x1/lorc/light-bulb.html
+- `lizardman.svg` — "Lizardman" by Lorc — https://game-icons.net/1x1/lorc/lizardman.html
+- `mage.svg` — "Wizard Face" by Delapouite — https://game-icons.net/1x1/delapouite/wizard-face.html
+- `merchant.svg` — "Shop" by Delapouite — https://game-icons.net/1x1/delapouite/shop.html
+- `noble.svg` — "Crown" by Lorc — https://game-icons.net/1x1/lorc/crown.html
+- `ogre.svg` — "Ogre" by Delapouite — https://game-icons.net/1x1/delapouite/ogre.html
+- `orc.svg` — "Orc Head" by Delapouite — https://game-icons.net/1x1/delapouite/orc-head.html
+- `priest.svg` — "Pope Crown" by Delapouite — https://game-icons.net/1x1/delapouite/pope-crown.html
+- `red_dragon.svg` — "Dragon Head" by Lorc — https://game-icons.net/1x1/lorc/dragon-head.html
+- `skeleton.svg` — "Skeleton" by Skoll — https://game-icons.net/1x1/skoll/skeleton.html
+- `spell_burning_hands.svg` — "Burning Embers" by Lorc — https://game-icons.net/1x1/lorc/burning-embers.html
+- `spell_cloudkill.svg` — "Poison Cloud" by sbed — https://game-icons.net/1x1/sbed/poison-cloud.html
+- `spell_cold.svg` — "Ice Spell Cast" by Delapouite — https://game-icons.net/1x1/delapouite/ice-spell-cast.html
+- `spell_darkness.svg` — "Eclipse" by Lorc — https://game-icons.net/1x1/lorc/eclipse.html
+- `spell_entangle.svg` — "Vine Whip" by Lorc — https://game-icons.net/1x1/lorc/vine-whip.html
+- `spell_faerie.svg` — "Sparkles" by Delapouite — https://game-icons.net/1x1/delapouite/sparkles.html
+- `spell_fireball.svg` — "Fireball" by Lorc — https://game-icons.net/1x1/lorc/fireball.html
+- `spell_firestorm.svg` — "Fire Wave" by Lorc — https://game-icons.net/1x1/lorc/fire-wave.html
+- `spell_ice.svg` — "Ice Cube" by Lorc — https://game-icons.net/1x1/lorc/ice-cube.html
+- `spell_lightning.svg` — "Lightning Tree" by Lorc — https://game-icons.net/1x1/lorc/lightning-tree.html
+- `spell_silence.svg` — "Silence" by Lorc — https://game-icons.net/1x1/lorc/silence.html
+- `spell_sleep.svg` — "Night Sleep" by Delapouite — https://game-icons.net/1x1/delapouite/night-sleep.html
+- `spell_stink.svg` — "Mushroom Cloud" by Lorc — https://game-icons.net/1x1/lorc/mushroom-cloud.html
+- `spell_thunderwave.svg` — "Sound Waves" by Skoll — https://game-icons.net/1x1/skoll/sound-waves.html
+- `spell_wall_fire.svg` — "Fire Silhouette" by Lorc — https://game-icons.net/1x1/lorc/fire-silhouette.html
+- `spell_web.svg` — "Spider Web" by Lorc — https://game-icons.net/1x1/lorc/spider-web.html
+- `statue.svg` — "Colombian Statue" by Delapouite — https://game-icons.net/1x1/delapouite/colombian-statue.html
+- `table.svg` — "Table" by Delapouite — https://game-icons.net/1x1/delapouite/table.html
+- `throne.svg` — "Throne King" by Delapouite — https://game-icons.net/1x1/delapouite/throne-king.html
+- `torch_floor.svg` — "Primitive Torch" by Delapouite — https://game-icons.net/1x1/delapouite/primitive-torch.html
+- `torch_sconce.svg` — "Torch" by Delapouite — https://game-icons.net/1x1/delapouite/torch.html
+- `troll.svg` — "Troll" by Skoll — https://game-icons.net/1x1/skoll/troll.html
+- `wight.svg` — "Grim Reaper" by Lorc — https://game-icons.net/1x1/lorc/grim-reaper.html
+- `wolf.svg` — "Wolf Head" by Lorc — https://game-icons.net/1x1/lorc/wolf-head.html
+- `zombie.svg` — "Shambling Zombie" by Delapouite — https://game-icons.net/1x1/delapouite/shambling-zombie.html
