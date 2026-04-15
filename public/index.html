@@ -230,47 +230,62 @@
 
       <section id="help-moving" class="help-section">
         <h3>Moving your token</h3>
-        <p>Find your character in the Tokens list on the left, then click and drag it across the map to move. If the DM has turned on Approval mode, your move shows up as a translucent ghost and waits for a thumbs-up before it becomes real — move again to change your proposal, or sit tight until the DM confirms.</p>
+        <p>Find your character in the Tokens list on the left, then click and drag it across the map to move. While you drag, a dashed circle shows how far your race can move in a single action — you can't drag past it, and the server double-checks on the other end. Walls and closed doors block the path too, so you can't squeeze through stone. If the DM has turned on Approval mode, your move shows up as a translucent ghost and waits for a thumbs-up before it becomes real.</p>
       </section>
 
       <section id="help-tokens" class="help-section">
         <h3>Tokens</h3>
-        <p>Click a token to open its sheet: name, HP, AC, color, and portrait image. Press <b>Q</b> and <b>E</b> while a token is selected to rotate its facing by 45°, which matters for bullseye lanterns and anything else that cares which way you're looking. Each token can carry a 1st-edition light source from the dropdown — candle, torch, lantern, bullseye, light spell, and friends — or you can punch in a custom radius override.</p>
+        <p>Click a token to open its sheet: name, HP, AC, color, race, move, size category, and portrait image. The <b>Preset</b> dropdown lets you pick from the per-ruleset creature catalog (goblins, orcs, dragons, NPCs, objects) and auto-fills everything for you — pick a Huge dragon and the token circle scales up to match. Upload a custom image, see a preview before saving, or hit <b>Clear image</b> to drop back to the default art. Press <b>Q</b> and <b>E</b> while a token is selected to rotate its facing by 45°; the arrowhead on the token's edge shows which way it's pointing, which matters for bullseye lanterns.</p>
+      </section>
+
+      <section id="help-presets" class="help-section">
+        <h3>Creature &amp; object presets</h3>
+        <p>The Preset dropdown in the token dialog draws from a catalog tied to the active ruleset, with separate lists for monsters, NPCs, and droppable objects (chests, beds, weapon racks, barrels, braziers, fountains, thrones, altars, and more). Pick one and the name, HP, AC, color, image, size, and move all populate at once — the fastest way to drop a roomful of orcs or furnish a chamber. You can still tweak any field afterwards before saving.</p>
       </section>
 
       <section id="help-walls" class="help-section dm-only">
         <h3>Walls &amp; doors</h3>
-        <p>The Walls &amp; Doors panel is your level-editor. <b>Wall edge</b> toggles a single wall on the edge of a cell you click; <b>Room</b> lets you drag a rectangle and drops a full wall perimeter in one go. The <b>Door</b> tool clicks an edge through the cycle of none → closed → open → none, and players can click a door on the map to request that you open it for them.</p>
+        <p>The Walls &amp; Doors panel is your level-editor. <b>Wall edge</b> toggles a single wall on the edge of a cell you click; <b>Room</b> lets you drag a rectangle and drops a full wall perimeter in one go. The <b>Door</b> tool clicks an edge through the cycle of none → closed → open → none. Walls and closed doors block both player movement and light, so think of them as the floor plan that drives everything else; players can click a door on the map to request you open it for them.</p>
       </section>
 
       <section id="help-fog" class="help-section">
         <h3>Fog of war &amp; light sources</h3>
-        <p>Fog hides the unexplored parts of the map from players. In 1e mode, each token's carried light source carves a circle of visibility that follows them around — bullseye lanterns throw a forward cone based on facing. The DM can also paint revealed or hidden areas by hand with the reveal and hide brushes in the Fog panel, or cover / clear the whole map with one click.</p>
+        <p>The map has three states: pitch-black unexplored ground players have never seen, dim <b>memory</b> from places they've been (you'll see ghost outlines of monsters and furniture at their last-known positions), and fully-lit cells that are currently in someone's torchlight. Every party token's carried light source carves a circle (bullseye lanterns throw a forward cone), and the fog updates live as a token is dragged so players see the room reveal in real time. Drop a torch on the floor as an object and it keeps burning — handy for lighting a room without a body in it. Monsters carrying torches deliberately do <i>not</i> illuminate, so dungeons stay scary. The DM can still paint reveal/hide brushes by hand and clear party memory from the Settings panel.</p>
       </section>
 
       <section id="help-approval" class="help-section">
         <h3>Approval mode</h3>
-        <p>When Approval mode is on, player moves and door interactions don't take effect immediately — they appear as ghost previews and queue up in the DM's Pending panel in the top right. The DM approves or denies each one; denied moves snap the token back to where it started. It's a gentle way to enforce turn order without freezing anybody's mouse.</p>
+        <p>Three independent toggles in Settings let the DM gate player actions: <b>moves</b>, <b>doors</b>, and <b>light source changes</b>. When any of them is on, the corresponding action queues up as a ghost preview in the Pending panel at top-right; the DM approves or denies each one and denied moves snap back. It's a gentle way to enforce turn order or stop a player from lighting a torch in the middle of a stealth scene.</p>
       </section>
 
       <section id="help-maps" class="help-section dm-only">
         <h3>Maps</h3>
-        <p>The Map Library in the top-left holds every map you've built. Use <b>+ New Map</b> to start a blank grid, then rename, duplicate, or delete entries from the row's little buttons. Click a map name to make it the active one — everyone at the table jumps to it instantly, complete with its walls, tokens, and fog.</p>
+        <p>The Map Library in the top-left holds every map you've built. Use <b>+ New Map</b> to start a blank grid, then rename, duplicate, or delete entries from the row's little buttons. Click a map name to make it the active one — everyone at the table jumps to it instantly, complete with its walls, tokens, fog, and feet-per-square scale. The corner legend (1 sq = 5 ft) and a 4-cell scale bar give players a visible sense of distance.</p>
+      </section>
+
+      <section id="help-random" class="help-section dm-only">
+        <h3>Random dungeons</h3>
+        <p>Stuck for a map? Hit <b>Generate random map</b> in the Map panel and the server lays down a procedural set of rooms, corridors, and doors on the active map. Each room is themed — barracks, library, smithy, kitchen, throne room — and gets auto-populated with matching furniture from the object catalog: bunks in the barracks, bookshelves in the library, anvils in the smithy. Don't like it? Ctrl+Z rolls the whole generation back so you can roll again.</p>
+      </section>
+
+      <section id="help-spells" class="help-section dm-only">
+        <h3>Spells &amp; effects</h3>
+        <p>Drop area-of-effect markers on the map to show where a spell lands — fireball circles, cone of cold cones, lightning bolt lines, and the rest of the standard catalog for the active ruleset. Each entry knows its own shape and radius so the overlay is correctly sized; great for showing players exactly who's in the blast before they roll their saves.</p>
       </section>
 
       <section id="help-chat" class="help-section">
         <h3>Chat &amp; dice</h3>
-        <p>The right-hand panel has quick buttons for every standard die, plus a custom box that understands notation like <code>2d6+3</code> or <code>1d20-1</code>. Results drop straight into the chat log beneath, which is also where you and the DM can type messages back and forth. The DM has a <b>clear</b> button to wipe the log when a session ends.</p>
+        <p>The right-hand panel has quick buttons for every standard die, plus a custom box that understands notation like <code>2d6+3</code> or <code>1d20-1</code>. Results drop straight into the chat log beneath, which is also where you and the DM can type messages back and forth. If you've collapsed the right panel, a red dot appears on its toggle when a new message comes in so you don't miss it. The DM has a <b>clear</b> button to wipe the log when a session ends.</p>
       </section>
 
       <section id="help-undo" class="help-section dm-only">
         <h3>Undo</h3>
-        <p>Did you just clear all the fog by accident? Hit <b>Ctrl+Z</b> or the Undo button in the toolbar and your last DM action rolls back. It covers walls, doors, fog edits, and token changes — a friendly safety net for when your finger slips on a big brush.</p>
+        <p>Did you just clear all the fog by accident, or generate a random dungeon you hate? Hit <b>Ctrl+Z</b> or the Undo button in the toolbar and your last DM action rolls back. It covers token moves/edits/creates/deletes, walls, doors, fog edits, map settings, and full random-map generation — a friendly safety net for when your finger slips on a big brush.</p>
       </section>
 
       <section id="help-interface" class="help-section">
         <h3>Interface</h3>
-        <p>Both side panels can be collapsed with the little arrow tabs on the screen edges, and their width is drag-resizable from the inner edge so you can give the map more room. The canvas itself zooms with the mouse wheel, pans with shift + drag, and the <b>reset</b> button in the toolbar recenters if you ever get lost.</p>
+        <p>Both side panels can be collapsed with the little arrow tabs on the screen edges, and their width is drag-resizable from the inner edge (180–600 px) so you can give the map more room. The canvas zooms with the mouse wheel, pans with shift + drag, and the <b>reset</b> button in the toolbar recenters if you ever get lost. The crescent-moon button toggles between dark parchment (the default) and a brighter daylight theme.</p>
       </section>
     </div>
 
