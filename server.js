@@ -54,6 +54,14 @@ app.get('/app.js', (req, res) => {
   res.type('application/javascript').send(APP_JS);
 });
 
+// Serve /creatures/* with no-cache so new icon SVGs (same filenames) are not
+// pinned by browsers or the Cloudflare edge under the generic public mount's
+// immutable/1y headers. Must precede the public mount to win route precedence.
+app.use('/creatures', express.static(path.join(__dirname, 'public', 'creatures'), {
+  setHeaders(res) {
+    res.set('Cache-Control', 'no-cache');
+  },
+}));
 app.use(express.static(path.join(__dirname, 'public'), { index: false, maxAge: '1y', immutable: true }));
 // Serve lib/ as a static asset so the browser client can import the same
 // pure-logic helpers the server uses (computeRevealed, wall collision, ...).

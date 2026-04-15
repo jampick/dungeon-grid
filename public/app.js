@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText } from '/lib/logic.js?v={{LIB_VERSION}}';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, cacheBustedImageUrl } from '/lib/logic.js?v={{LIB_VERSION}}';
 import { getCreatures, SIZE_MULTIPLIERS, sizeMultiplier } from '/lib/creatures.js?v={{LIB_VERSION}}';
 import { getObjects } from '/lib/objects.js?v={{LIB_VERSION}}';
 import { getSpells } from '/lib/spells.js?v={{LIB_VERSION}}';
@@ -1066,16 +1066,25 @@ function drawHex(cx, cy, r) {
   ctx.stroke();
 }
 
-// Module-level cache of loaded token images, keyed by URL.
+// Build a deploy-versioned URL for /creatures/* images so a new deploy
+// forces browsers and the Cloudflare edge to re-fetch icon SVGs whose
+// filenames stayed the same but whose bytes changed. Uploads pass through.
+function bustImageUrl(url) {
+  const sha = (state && state.deployment && state.deployment.shortSha) || 'dev';
+  return cacheBustedImageUrl(url, sha);
+}
+
+// Module-level cache of loaded token images, keyed by (cache-busted) URL.
 const tokenImageCache = new Map();
 function getTokenImage(url) {
-  let entry = tokenImageCache.get(url);
+  const key = bustImageUrl(url);
+  let entry = tokenImageCache.get(key);
   if (entry) return entry;
   entry = { img: new Image(), status: 'loading' };
   entry.img.onload = () => { entry.status = 'loaded'; draw(); };
   entry.img.onerror = () => { entry.status = 'error'; };
-  entry.img.src = url;
-  tokenImageCache.set(url, entry);
+  entry.img.src = key;
+  tokenImageCache.set(key, entry);
   return entry;
 }
 
@@ -1591,7 +1600,9 @@ function refreshPresetRow() {
 }
 function setPreviewSrc(imgEl, src) {
   if (src) {
-    imgEl.src = src;
+    // Apply the same /creatures/* cache-bust used for canvas token images so
+    // preset preview and "current image" panes see the current deploy bytes.
+    imgEl.src = bustImageUrl(src);
     imgEl.style.display = '';
   } else {
     imgEl.removeAttribute('src');
