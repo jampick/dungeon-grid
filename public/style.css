@@ -127,6 +127,7 @@ body {
   z-index: 100;
   width: 18px; height: 48px;
   background: var(--paper);
+  color: var(--ink);
   border: 1px solid var(--ink);
   cursor: pointer;
   font-family: inherit;
@@ -189,18 +190,33 @@ main {
 }
 #approvalBox h4 { margin: 0 0 6px; font-variant: small-caps; border-bottom: 1px solid var(--accent); }
 #approvalBox .pending { margin: 6px 0; padding: 4px 0; border-bottom: 1px dashed var(--ink-soft); font-size: 13px; }
-#approvalBox button { font: inherit; padding: 2px 8px; background: var(--paper); border: 1px solid var(--ink); cursor: pointer; margin-top: 4px; }
+#approvalBox button { font: inherit; padding: 2px 8px; background: var(--paper); color: var(--ink); border: 1px solid var(--ink); cursor: pointer; margin-top: 4px; }
 
 dialog {
   background: var(--paper); color: var(--ink);
   border: 2px solid var(--ink); padding: 16px;
   font-family: inherit;
 }
-dialog label { display: block; margin: 6px 0; }
-dialog input, dialog select { font: inherit; padding: 4px; background: var(--paper); border: 1px solid var(--ink); }
+dialog label { display: block; margin: 6px 0; color: var(--ink); }
+dialog input, dialog select, dialog textarea {
+  font: inherit; padding: 4px;
+  background: var(--paper); color: var(--ink);
+  border: 1px solid var(--ink);
+}
+dialog input[type="color"] { padding: 2px; border: 1px solid var(--ink); }
+dialog input[type="file"] { color: var(--ink); }
 dialog menu { display: flex; gap: 8px; padding: 0; margin-top: 12px; }
-dialog button { font: inherit; padding: 6px 12px; background: var(--paper); border: 1px solid var(--ink); cursor: pointer; }
+dialog button {
+  font: inherit; padding: 6px 12px;
+  background: var(--paper); color: var(--ink);
+  border: 1px solid var(--ink); cursor: pointer;
+}
+dialog button:hover { background: var(--paper-dark); }
 dialog button.danger { color: var(--accent); }
+body.dark dialog button.danger { color: #ff8a5c; border-color: #ff8a5c; }
+
+/* Ensure <option> elements are readable in dark mode across browsers */
+option { background: var(--paper); color: var(--ink); }
 
 body.player .dm-only { display: none; }
 
