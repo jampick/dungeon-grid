@@ -1423,6 +1423,13 @@ canvas.addEventListener('mousedown', (e) => {
   // empty space is a no-op. Pan requires an explicit modifier
   // (shift / middle / right) — handled by the shouldStartPan branch
   // above.
+  // Plain click on empty space (no token, no tool mode, no pan) also
+  // deselects any currently selected token so the halo clears.
+  if (selectedTokenId != null) {
+    selectedTokenId = null;
+    draw();
+    renderTokenList();
+  }
 });
 canvas.addEventListener('mousemove', (e) => {
   if (!dragging) {
@@ -1956,6 +1963,16 @@ document.addEventListener('keydown', (e) => {
   else return;
   const facing = ((t.facing || 0) + delta + 8) % 8;
   socket.emit('token:update', { id: t.id, facing });
+});
+
+// Esc deselects the currently selected token. Native <dialog> elements
+// consume Escape themselves, so this only fires when no modal is open.
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  if (selectedTokenId == null) return;
+  selectedTokenId = null;
+  draw();
+  renderTokenList();
 });
 
 // ---- boot ----
