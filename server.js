@@ -10,7 +10,8 @@ import { fileURLToPath } from 'url';
 import { LIGHT_PRESETS, FACING_VEC, computeRevealed, rollDice, recomputeFog as recomputeFogLogic,
   canClearChat, createUndoStack, snapshotToken, restoreTokenRow, snapshotWalls, restoreWalls, snapshotMap, snapshotFog,
   isReachable, pathCost, shouldQueueLightChange, loginDm, loginPlayer, generateRandomDungeon, computeMemoryTokensFromDb,
-  computeActivePlayerIds, reassignOwnedTokensToNull } from './lib/logic.js';
+  computeActivePlayerIds, reassignOwnedTokensToNull,
+  applyTerrainPaint, applyTerrainClear } from './lib/logic.js';
 import { getObjectById } from './lib/objects.js';
 import { sizeMultiplier } from './lib/creatures.js';
 import { listMaps, createMap as createMapDb, renameMap as renameMapDb, activateMap as activateMapDb, duplicateMap as duplicateMapDb, deleteMap as deleteMapDb, performTravel, nullLinksToMap } from './lib/maps.js';
@@ -162,6 +163,13 @@ CREATE TABLE IF NOT EXISTS cell_memory (
   snapshot TEXT,
   PRIMARY KEY (map_id, cx, cy, token_id)
 );
+CREATE TABLE IF NOT EXISTS terrain (
+  map_id INTEGER,
+  cx INTEGER,
+  cy INTEGER,
+  kind TEXT,
+  PRIMARY KEY (map_id, cx, cy)
+);
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY,
   campaign_id INTEGER,
@@ -187,6 +195,8 @@ for (const stmt of [
   "ALTER TABLE tokens ADD COLUMN link_map_id INTEGER",
   "ALTER TABLE tokens ADD COLUMN link_x INTEGER",
   "ALTER TABLE tokens ADD COLUMN link_y INTEGER",
+  // Terrain table — re-run CREATE for older DBs that predate the schema.
+  "CREATE TABLE IF NOT EXISTS terrain (map_id INTEGER, cx INTEGER, cy INTEGER, kind TEXT, PRIMARY KEY (map_id, cx, cy))",
 ]) { try { db.exec(stmt); } catch {} }
 
 // Light presets / FACING_VEC / computeRevealed now live in lib/logic.js.
@@ -332,14 +342,16 @@ function getState() {
   const lightPendings = [...pendingLights.entries()].map(([id, v]) => ({ id, ...v }));
   let explored = [];
   let memoryTokens = [];
+  let terrain = [];
   if (activeMap) {
     explored = db.prepare('SELECT cx, cy FROM explored_cells WHERE map_id=?').all(activeMap.id).map(r => `${r.cx},${r.cy}`);
     let fogSet = null;
     try { fogSet = new Set(JSON.parse(fogRow?.data || '[]')); } catch { fogSet = new Set(); }
     memoryTokens = computeMemoryTokensFromDb(db, activeMap.id, fogSet);
+    terrain = db.prepare('SELECT cx, cy, kind FROM terrain WHERE map_id=?').all(activeMap.id);
   }
   const activePlayerIds = computeActivePlayerIds(activePlayers);
-  return { campaign, maps, activeMap, tokens, fog: fogRow?.data || null, walls, catalog, players, activePlayerIds, pendings, doorPendings, lightPendings, undoLabel: undoStack.topLabel(), deployment: DEPLOYMENT, explored, memoryTokens };
+  return { campaign, maps, activeMap, tokens, fog: fogRow?.data || null, walls, catalog, players, activePlayerIds, pendings, doorPendings, lightPendings, undoLabel: undoStack.topLabel(), deployment: DEPLOYMENT, explored, memoryTokens, terrain };
 }
 
 app.get('/api/state', (req, res) => {
@@ -674,6 +686,42 @@ io.on('connection', (socket) => {
     db.prepare('INSERT INTO fog (map_id, data) VALUES (?,?) ON CONFLICT(map_id) DO UPDATE SET data=excluded.data').run(map.id, data);
     io.emit('fog:state', { data });
     broadcastState();
+  });
+
+  socket.on('terrain:paint', ({ cx, cy, kind }) => {
+    if (!requireDM(socket)) return;
+    const map = getActiveMap();
+    if (!map) return;
+    const r = applyTerrainPaint(db, map.id, cx, cy, kind);
+    if (!r.ok) return;
+    io.emit('terrain:state', db.prepare('SELECT cx, cy, kind FROM terrain WHERE map_id=?').all(map.id));
+  });
+
+  socket.on('terrain:clear', ({ cx, cy }) => {
+    if (!requireDM(socket)) return;
+    const map = getActiveMap();
+    if (!map) return;
+    const r = applyTerrainClear(db, map.id, cx, cy);
+    if (!r.ok) return;
+    io.emit('terrain:state', db.prepare('SELECT cx, cy, kind FROM terrain WHERE map_id=?').all(map.id));
+  });
+
+  socket.on('terrain:rect', ({ x1, y1, x2, y2, kind }) => {
+    if (!requireDM(socket)) return;
+    const map = getActiveMap();
+    if (!map) return;
+    const xa = Math.min(x1, x2), xb = Math.max(x1, x2);
+    const ya = Math.min(y1, y2), yb = Math.max(y1, y2);
+    const tx = db.transaction(() => {
+      for (let cy = ya; cy <= yb; cy++) {
+        for (let cx = xa; cx <= xb; cx++) {
+          if (kind == null) applyTerrainClear(db, map.id, cx, cy);
+          else applyTerrainPaint(db, map.id, cx, cy, kind);
+        }
+      }
+    });
+    tx();
+    io.emit('terrain:state', db.prepare('SELECT cx, cy, kind FROM terrain WHERE map_id=?').all(map.id));
   });
 
   socket.on('wall:toggle', ({ cx, cy, side }) => {

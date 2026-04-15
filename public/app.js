@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, cacheBustedImageUrl, lightClipRadiusPx, hasLineOfSight, findCopyOffset, shouldStartPan, isTokenSelected } from '/lib/logic.js?v={{LIB_VERSION}}';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, cacheBustedImageUrl, lightClipRadiusPx, hasLineOfSight, findCopyOffset, shouldStartPan, isTokenSelected, TERRAIN_COLORS, TERRAIN_KINDS, pickTerrainColor } from '/lib/logic.js?v={{LIB_VERSION}}';
 import { getCreatures, SIZE_MULTIPLIERS, sizeMultiplier } from '/lib/creatures.js?v={{LIB_VERSION}}';
 import { getObjects } from '/lib/objects.js?v={{LIB_VERSION}}';
 import { getSpells } from '/lib/spells.js?v={{LIB_VERSION}}';
@@ -50,6 +50,11 @@ let previewFogCells = null;
 let wallMode = null; // 'edge' | 'room' | null
 let walls = new Map(); // "cx,cy,side" -> { kind, open }
 let roomDrag = null; // {x1,y1,x2,y2}
+// Terrain paint: parallel to fogMode. terrainMode is the selected kind name
+// (e.g. 'grass'), the string 'erase' for the eraser, or null when no
+// terrain tool is active. terrainCells is keyed "cx,cy" -> kind string.
+let terrainMode = null;
+let terrainCells = new Map();
 
 async function api(path, opts = {}) {
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
@@ -140,6 +145,7 @@ function connectSocket() {
   });
   socket.on('fog:state', ({ data }) => { loadFog(data); draw(); });
   socket.on('walls:state', (list) => { loadWalls(list); draw(); });
+  socket.on('terrain:state', (list) => { loadTerrain(list); draw(); });
   socket.on('chat:msg', onChat);
   socket.on('chat:cleared', () => { const c = $('chat'); if (c) c.innerHTML = ''; });
   socket.on('approval:request', () => {}); // legacy
@@ -158,6 +164,7 @@ function applyState() {
     exploredCells = new Set();
     memoryTokens = [];
     walls = new Map();
+    terrainCells = new Map();
     view = { scale: 1, ox: 20, oy: 20 };
     selectedTokenId = null;
   }
@@ -177,6 +184,7 @@ function applyState() {
   loadExplored(state.explored || []);
   loadMemoryTokens(state.memoryTokens || []);
   loadWalls(state.walls || []);
+  loadTerrain(state.terrain || []);
   renderTokenList();
   renderOwners();
   renderPendings();
@@ -630,6 +638,22 @@ function draw() {
     ctx.globalAlpha = 0.85;
     ctx.drawImage(bgImg, 0, 0, W, H);
     ctx.globalAlpha = 1;
+  }
+
+  // terrain layer (semi-transparent, beneath grid lines and walls but
+  // above the paper background and any uploaded map image)
+  if (terrainCells.size) {
+    ctx.save();
+    ctx.globalAlpha = 0.55;
+    for (const [key, kind] of terrainCells) {
+      const color = pickTerrainColor(kind);
+      if (!color) continue;
+      const comma = key.indexOf(',');
+      const cx = +key.slice(0, comma), cy = +key.slice(comma + 1);
+      ctx.fillStyle = color;
+      ctx.fillRect(cx * size, cy * size, size, size);
+    }
+    ctx.restore();
   }
 
   // grid
@@ -1354,6 +1378,12 @@ canvas.addEventListener('mousedown', (e) => {
     return;
   }
 
+  if (terrainMode && auth.role === 'dm') {
+    paintTerrainAt(cellX, cellY);
+    dragging = { mode: 'terrain' };
+    return;
+  }
+
   // Explicit pan modifier: shift, middle-click, or right-click.
   // Must run before token hit-test so users can pan even when the
   // cursor happens to be over a token.
@@ -1497,6 +1527,11 @@ canvas.addEventListener('mousemove', (e) => {
     const key = `${Math.floor(w.x/size)},${Math.floor(w.y/size)}`;
     if (fogMode === 'reveal') fogCells.delete(key); else fogCells.add(key);
     draw();
+  }
+  if (terrainMode && (e.buttons & 1) && auth.role === 'dm') {
+    const w = screenToWorld(sx, sy);
+    const size = state.activeMap.grid_size;
+    paintTerrainAt(Math.floor(w.x/size), Math.floor(w.y/size));
   }
 });
 canvas.addEventListener('mouseup', () => {
@@ -1925,6 +1960,65 @@ $('tkCopy').onclick = () => {
   dlg.close();
 };
 
+// ---- Terrain ----
+function paintTerrainAt(cx, cy) {
+  if (!state?.activeMap) return;
+  const m = state.activeMap;
+  if (cx < 0 || cy < 0 || cx >= m.width || cy >= m.height) return;
+  const key = `${cx},${cy}`;
+  if (terrainMode === 'erase') {
+    if (!terrainCells.has(key)) return;
+    terrainCells.delete(key);
+    socket.emit('terrain:clear', { cx, cy });
+  } else {
+    if (terrainCells.get(key) === terrainMode) return;
+    terrainCells.set(key, terrainMode);
+    socket.emit('terrain:paint', { cx, cy, kind: terrainMode });
+  }
+  draw();
+}
+
+function setTerrainMode(kind) {
+  terrainMode = terrainMode === kind ? null : kind;
+  if (terrainMode) {
+    fogMode = null;
+    wallMode = null;
+    for (const id of ['wallEdge','wallRoom','doorTool']) {
+      const el = $(id); if (el) el.classList.remove('active');
+    }
+  }
+  const palette = $('terrainPalette');
+  if (palette) {
+    for (const btn of palette.querySelectorAll('.terrain-swatch')) {
+      btn.classList.toggle('active', btn.dataset.kind === terrainMode);
+    }
+  }
+}
+
+function renderTerrainPalette() {
+  const palette = $('terrainPalette');
+  if (!palette || palette.dataset.built === '1') return;
+  palette.dataset.built = '1';
+  for (const kind of TERRAIN_KINDS) {
+    const btn = document.createElement('button');
+    btn.className = 'terrain-swatch';
+    btn.dataset.kind = kind;
+    btn.title = kind;
+    btn.style.background = TERRAIN_COLORS[kind];
+    btn.onclick = () => setTerrainMode(kind);
+    palette.appendChild(btn);
+  }
+  const eraser = document.createElement('button');
+  eraser.className = 'terrain-swatch';
+  eraser.dataset.kind = 'erase';
+  eraser.title = 'Eraser';
+  eraser.textContent = 'X';
+  eraser.style.background = 'var(--paper)';
+  eraser.onclick = () => setTerrainMode('erase');
+  palette.appendChild(eraser);
+}
+renderTerrainPalette();
+
 // ---- Fog ----
 $('fogReveal').onclick = () => { fogMode = fogMode === 'reveal' ? null : 'reveal'; };
 $('fogHide').onclick = () => { fogMode = fogMode === 'hide' ? null : 'hide'; };
@@ -1956,11 +2050,14 @@ function loadMemoryTokens(list) {
 function loadWalls(list) {
   walls = new Map(list.map(w => [`${w.cx},${w.cy},${w.side}`, { kind: w.kind || 'wall', open: !!w.open }]));
 }
+function loadTerrain(list) {
+  terrainCells = new Map((list || []).map(t => [`${t.cx},${t.cy}`, t.kind]));
+}
 
 // Wall tool buttons
 function setWallMode(m) {
   wallMode = wallMode === m ? null : m;
-  if (wallMode) fogMode = null;
+  if (wallMode) { fogMode = null; terrainMode = null; const pal = $('terrainPalette'); if (pal) for (const b of pal.querySelectorAll('.terrain-swatch')) b.classList.remove('active'); }
   for (const id of ['wallEdge','wallRoom','doorTool']) $(id).classList.remove('active');
   if (wallMode === 'edge') $('wallEdge').classList.add('active');
   if (wallMode === 'room') $('wallRoom').classList.add('active');
