@@ -11,6 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { SPELLS } from '../lib/spells.js';
+import { ICON_MAPPING, SPELL_ID_TO_FILE } from './icon-mapping.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = path.join(__dirname, '..', 'public', 'creatures');
@@ -34,14 +35,20 @@ function svg(letter, color) {
 `;
 }
 
-// De-dupe by image path — 1e/2e/5e share filenames for shared spell ids.
+// De-dupe by image path — 1e/2e/5e share filenames for shared spell
+// ids. Entries whose filename stem (e.g. `spell_fireball`) appears in
+// ICON_MAPPING are skipped: they've been replaced with a
+// game-icons.net download by scripts/fetch-game-icons.mjs.
 const seen = new Set();
 let written = 0;
+let skipped = 0;
 for (const ruleset of Object.keys(SPELLS)) {
   for (const category of Object.keys(SPELLS[ruleset])) {
     for (const s of SPELLS[ruleset][category]) {
       if (seen.has(s.image)) continue;
       seen.add(s.image);
+      const fileStem = SPELL_ID_TO_FILE[s.id];
+      if (fileStem && ICON_MAPPING[fileStem]) { skipped++; continue; }
       const base = path.basename(s.image);
       const letter = (s.name[0] || '?').toUpperCase();
       fs.writeFileSync(path.join(OUT_DIR, base), svg(letter, opaqueFill(s.color)));
@@ -49,4 +56,4 @@ for (const ruleset of Object.keys(SPELLS)) {
     }
   }
 }
-console.log(`Wrote ${written} spell SVG files to ${OUT_DIR}`);
+console.log(`Wrote ${written} spell SVG files to ${OUT_DIR} (skipped ${skipped} with game-icons mapping)`);
