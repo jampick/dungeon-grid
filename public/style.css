@@ -299,3 +299,28 @@ body.player .dm-only { display: none; }
   min-width: 28px;
 }
 body.player .help-section.dm-only { display: none; }
+
+.token-image-preview {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+  flex-wrap: wrap;
+}
+.token-image-preview .label {
+  font-size: 12px;
+  color: var(--ink-soft);
+}
+.token-image-preview img {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  object-fit: cover;
+}
+.token-image-preview img:not([src]),
+.token-image-preview img[src=""] {
+  display: none;
+}
+  border-radius: 50
