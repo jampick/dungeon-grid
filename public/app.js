@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, stackOffsets } from '/lib/logic.js';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, stackOffsets } from '/lib/logic.js?v={{LIB_VERSION}}';
 
 const $ = (id) => document.getElementById(id);
 const loginEl = $('login'), appEl = $('app');

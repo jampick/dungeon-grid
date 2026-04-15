@@ -39,6 +39,18 @@ app.get(['/', '/index.html'], (req, res) => {
   res.type('html').send(INDEX_HTML);
 });
 
+// Render app.js once at startup with {{LIB_VERSION}} substituted for the
+// deployed short SHA. This cache-busts the static `import` of /lib/logic.js
+// inside the module so a new deploy can't load a fresh app.js against a
+// stale cached lib (which previously caused "does not provide an export
+// named 'stackOffsets'" SyntaxErrors after deploys).
+const APP_JS = fs.readFileSync(path.join(__dirname, 'public', 'app.js'), 'utf8')
+  .replace(/\{\{LIB_VERSION\}\}/g, CACHE_BUST);
+app.get('/app.js', (req, res) => {
+  res.set('Cache-Control', 'no-cache');
+  res.type('application/javascript').send(APP_JS);
+});
+
 app.use(express.static(path.join(__dirname, 'public'), { index: false, maxAge: '1y', immutable: true }));
 // Serve lib/ as a static asset so the browser client can import the same
 // pure-logic helpers the server uses (computeRevealed, wall collision, ...).
