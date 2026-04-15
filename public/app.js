@@ -3,7 +3,21 @@
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
 import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius } from '/lib/logic.js?v={{LIB_VERSION}}';
-import { getCreatures } from '/lib/creatures.js?v={{LIB_VERSION}}';
+import { getCreatures, SIZE_MULTIPLIERS, sizeMultiplier } from '/lib/creatures.js?v={{LIB_VERSION}}';
+
+// Map a numeric token-size multiplier back to the closest D&D size category
+// label, for repopulating the Size <select> when editing an existing token.
+function categoryForMultiplier(mult) {
+  const n = Number(mult);
+  if (!isFinite(n) || n <= 0) return 'medium';
+  let best = 'medium';
+  let bestDelta = Infinity;
+  for (const [cat, m] of Object.entries(SIZE_MULTIPLIERS)) {
+    const d = Math.abs(m - n);
+    if (d < bestDelta) { bestDelta = d; best = cat; }
+  }
+  return best;
+}
 
 const $ = (id) => document.getElementById(id);
 const loginEl = $('login'), appEl = $('app');
@@ -1429,6 +1443,7 @@ function openTokenDialog(id) {
   populateRaceList();
   $('tkRace').value = t?.race || '';
   $('tkMove').value = t?.move ?? 6;
+  if ($('tkSize')) $('tkSize').value = categoryForMultiplier(t?.size ?? 1);
   $('tkDelete').style.display = id && auth.role === 'dm' ? '' : 'none';
   resetTokenImagePreview(t?.image || '');
   refreshPresetRow();
@@ -1459,6 +1474,8 @@ $('tkPreset').onchange = () => {
   pendingPresetImage = preset.image;
   clearImageRequested = false;
   setPreviewSrc($('tkImgPreview'), preset.image);
+  if ($('tkSize') && preset.size) $('tkSize').value = preset.size;
+  if (preset.move != null) $('tkMove').value = preset.move;
 };
 $('tkImage').onchange = () => {
   const file = $('tkImage').files[0];
@@ -1492,6 +1509,7 @@ $('tkSave').onclick = async () => {
     owner_id: $('tkOwner').value ? parseInt($('tkOwner').value, 10) : null,
     race: $('tkRace').value || null,
     move: parseInt($('tkMove').value, 10) || 6,
+    size: sizeMultiplier($('tkSize') ? $('tkSize').value : 'medium'),
   };
   const file = $('tkImage').files[0];
   if (file) {
