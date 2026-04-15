@@ -105,6 +105,7 @@
       <button id="btnReset">reset</button>
       <button id="btnUndo" class="dm-only" title="Undo last DM action (Ctrl+Z)">Undo</button>
       <button id="btnTheme" title="Toggle light / dark theme">&#x263E;</button>
+      <button id="btnHelp" title="Show help / instructions">?</button>
     </div>
     <canvas id="board"></canvas>
   </main>
@@ -182,6 +183,72 @@
 </dialog>
 
 <div id="approvalBox" class="hidden"></div>
+
+<div id="helpOverlay" class="help-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="helpTitle">
+  <div class="help-backdrop"></div>
+  <div class="help-panel">
+    <button id="helpClose" class="help-close" title="Close (Esc)">×</button>
+    <h2 id="helpTitle">Welcome to Dungeon Grid</h2>
+    <p id="helpIntro" class="help-intro"></p>
+
+    <div class="help-sections">
+      <section id="help-getting-started" class="help-section">
+        <h3>Getting started</h3>
+        <p>Type your name on the login screen and hop in as a Player, or enter the DM password to run the table. Once you're in, the current map fills the middle of the screen — drag with the right mouse button (or shift + drag) to pan around, and spin the scroll wheel to zoom. If a DM is already logged in, you'll share their map in real time.</p>
+      </section>
+
+      <section id="help-moving" class="help-section">
+        <h3>Moving your token</h3>
+        <p>Find your character in the Tokens list on the left, then click and drag it across the map to move. If the DM has turned on Approval mode, your move shows up as a translucent ghost and waits for a thumbs-up before it becomes real — move again to change your proposal, or sit tight until the DM confirms.</p>
+      </section>
+
+      <section id="help-tokens" class="help-section">
+        <h3>Tokens</h3>
+        <p>Click a token to open its sheet: name, HP, AC, color, and portrait image. Press <b>Q</b> and <b>E</b> while a token is selected to rotate its facing by 45°, which matters for bullseye lanterns and anything else that cares which way you're looking. Each token can carry a 1st-edition light source from the dropdown — candle, torch, lantern, bullseye, light spell, and friends — or you can punch in a custom radius override.</p>
+      </section>
+
+      <section id="help-walls" class="help-section dm-only">
+        <h3>Walls &amp; doors</h3>
+        <p>The Walls &amp; Doors panel is your level-editor. <b>Wall edge</b> toggles a single wall on the edge of a cell you click; <b>Room</b> lets you drag a rectangle and drops a full wall perimeter in one go. The <b>Door</b> tool clicks an edge through the cycle of none → closed → open → none, and players can click a door on the map to request that you open it for them.</p>
+      </section>
+
+      <section id="help-fog" class="help-section">
+        <h3>Fog of war &amp; light sources</h3>
+        <p>Fog hides the unexplored parts of the map from players. In 1e mode, each token's carried light source carves a circle of visibility that follows them around — bullseye lanterns throw a forward cone based on facing. The DM can also paint revealed or hidden areas by hand with the reveal and hide brushes in the Fog panel, or cover / clear the whole map with one click.</p>
+      </section>
+
+      <section id="help-approval" class="help-section">
+        <h3>Approval mode</h3>
+        <p>When Approval mode is on, player moves and door interactions don't take effect immediately — they appear as ghost previews and queue up in the DM's Pending panel in the top right. The DM approves or denies each one; denied moves snap the token back to where it started. It's a gentle way to enforce turn order without freezing anybody's mouse.</p>
+      </section>
+
+      <section id="help-maps" class="help-section dm-only">
+        <h3>Maps</h3>
+        <p>The Map Library in the top-left holds every map you've built. Use <b>+ New Map</b> to start a blank grid, then rename, duplicate, or delete entries from the row's little buttons. Click a map name to make it the active one — everyone at the table jumps to it instantly, complete with its walls, tokens, and fog.</p>
+      </section>
+
+      <section id="help-chat" class="help-section">
+        <h3>Chat &amp; dice</h3>
+        <p>The right-hand panel has quick buttons for every standard die, plus a custom box that understands notation like <code>2d6+3</code> or <code>1d20-1</code>. Results drop straight into the chat log beneath, which is also where you and the DM can type messages back and forth. The DM has a <b>clear</b> button to wipe the log when a session ends.</p>
+      </section>
+
+      <section id="help-undo" class="help-section dm-only">
+        <h3>Undo</h3>
+        <p>Did you just clear all the fog by accident? Hit <b>Ctrl+Z</b> or the Undo button in the toolbar and your last DM action rolls back. It covers walls, doors, fog edits, and token changes — a friendly safety net for when your finger slips on a big brush.</p>
+      </section>
+
+      <section id="help-interface" class="help-section">
+        <h3>Interface</h3>
+        <p>Both side panels can be collapsed with the little arrow tabs on the screen edges, and their width is drag-resizable from the inner edge so you can give the map more room. The canvas itself zooms with the mouse wheel, pans with shift + drag, and the <b>reset</b> button in the toolbar recenters if you ever get lost.</p>
+      </section>
+    </div>
+
+    <label class="help-hide-again">
+      <input type="checkbox" id="helpHideAgain" />
+      Don't show this again
+    </label>
+  </div>
+</div>
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="/app.js?v={{VERSION}}"></script>

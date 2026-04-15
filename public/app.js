@@ -58,6 +58,55 @@ function enterApp() {
   document.body.classList.toggle('player', auth.role !== 'dm');
   $('meInfo').textContent = `${auth.name} (${auth.role})`;
   connectSocket();
+  // Auto-open help on first visit after login.
+  if (!localStorage.getItem('dg_seen_help') && localStorage.getItem('dg_hide_help') !== '1') {
+    setTimeout(() => openHelp(), 500);
+  }
+}
+
+// ---- Help overlay ----
+function openHelp() {
+  const overlay = $('helpOverlay');
+  if (!overlay) return;
+  const roleLabel = auth && auth.role === 'dm' ? 'the <b>Dungeon Master</b>' : 'a <b>Player</b>';
+  const intro = $('helpIntro');
+  if (intro) {
+    intro.innerHTML = `Welcome! You're playing as ${roleLabel}. Here's a quick tour of what the table can do — you can always reopen this from the <b>?</b> button in the toolbar.`;
+  }
+  const hide = $('helpHideAgain');
+  if (hide) hide.checked = localStorage.getItem('dg_hide_help') === '1';
+  overlay.classList.remove('hidden');
+}
+function closeHelp() {
+  const overlay = $('helpOverlay');
+  if (!overlay) return;
+  overlay.classList.add('hidden');
+  localStorage.setItem('dg_seen_help', '1');
+  const hide = $('helpHideAgain');
+  if (hide && hide.checked) localStorage.setItem('dg_hide_help', '1');
+  else localStorage.removeItem('dg_hide_help');
+}
+function wireHelpOverlay() {
+  const btn = $('btnHelp');
+  if (btn) btn.addEventListener('click', openHelp);
+  const closeBtn = $('helpClose');
+  if (closeBtn) closeBtn.addEventListener('click', closeHelp);
+  const overlay = $('helpOverlay');
+  if (overlay) {
+    overlay.addEventListener('click', (e) => {
+      if (e.target.classList.contains('help-backdrop')) closeHelp();
+    });
+  }
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && overlay && !overlay.classList.contains('hidden')) {
+      closeHelp();
+    }
+  });
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', wireHelpOverlay);
+} else {
+  wireHelpOverlay();
 }
 
 function connectSocket() {
