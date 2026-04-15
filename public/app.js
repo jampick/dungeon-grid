@@ -145,6 +145,7 @@ function applyState() {
   $('mapH').value = m.height;
   $('approval').checked = !!state.campaign.approval_mode;
   $('doorApproval').checked = !!state.campaign.door_approval;
+  $('lightApproval').checked = !!state.campaign.light_approval;
   $('showOtherHp').checked = !!state.campaign.show_other_hp;
   $('ruleset').value = state.campaign.ruleset || '1e';
   loadFog(state.fog);
@@ -179,7 +180,8 @@ function renderPendings() {
   const box = $('approvalBox');
   const moves = state.pendings || [];
   const doors = state.doorPendings || [];
-  if (auth.role !== 'dm' || (!moves.length && !doors.length)) {
+  const lights = state.lightPendings || [];
+  if (auth.role !== 'dm' || (!moves.length && !doors.length && !lights.length)) {
     box.classList.add('hidden');
     box.innerHTML = '';
     return;
@@ -204,6 +206,17 @@ function renderPendings() {
       <br/><button class="ok">Approve</button> <button class="no">Deny</button>`;
     row.querySelector('.ok').onclick = () => socket.emit('door:resolve', { approved: true, key: p.key });
     row.querySelector('.no').onclick = () => socket.emit('door:resolve', { approved: false, key: p.key });
+    box.appendChild(row);
+  }
+  for (const p of lights) {
+    const t = state.tokens.find(x => x.id === p.id);
+    const name = t?.name || `#${p.id}`;
+    const row = document.createElement('div');
+    row.className = 'pending';
+    row.innerHTML = `<b>${escapeHtml(p.actor)}</b> wants to change ${escapeHtml(name)}'s light: ${escapeHtml(p.from.light_type)} → ${escapeHtml(p.to.light_type)} (radius ${p.from.light_radius} → ${p.to.light_radius})
+      <br/><button class="ok">Approve</button> <button class="no">Deny</button>`;
+    row.querySelector('.ok').onclick = () => socket.emit('light:resolve', { approved: true, tokenId: p.id });
+    row.querySelector('.no').onclick = () => socket.emit('light:resolve', { approved: false, tokenId: p.id });
     box.appendChild(row);
   }
 }
@@ -1072,6 +1085,7 @@ $('clearBg').onclick = () => {
 
 $('approval').onchange = () => socket.emit('campaign:settings', { approval_mode: $('approval').checked ? 1 : 0 });
 $('doorApproval').onchange = () => socket.emit('campaign:settings', { door_approval: $('doorApproval').checked ? 1 : 0 });
+$('lightApproval').onchange = () => socket.emit('campaign:settings', { light_approval: $('lightApproval').checked ? 1 : 0 });
 $('showOtherHp').onchange = () => socket.emit('campaign:settings', { show_other_hp: $('showOtherHp').checked ? 1 : 0 });
 $('ruleset').onchange = () => socket.emit('campaign:settings', { ruleset: $('ruleset').value });
 
