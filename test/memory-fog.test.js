@@ -256,6 +256,86 @@ test('map duplication does NOT copy explored_cells / cell_memory', () => {
   assert.equal(mem, 0, 'duplicated map has no memory');
 });
 
+test('party PC tokens are never written to cell_memory', () => {
+  const { db } = makeTempDb();
+  const mapId = makeMap(db);
+  const heroId = addToken(db, mapId, { kind: 'pc', name: 'Hero', x: 5, y: 5, light_type: 'torch', owner_id: 1 });
+  recomputeFog(db, () => {}, mapId);
+  // While lit there should be no snapshot for the PC.
+  let row = db.prepare('SELECT * FROM cell_memory WHERE map_id=? AND token_id=?').all(mapId, heroId);
+  assert.equal(row.length, 0, 'PC never snapshotted while lit');
+  // Move PC away — cell (5,5) becomes fogged but no snapshot of PC should have been frozen.
+  db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(15, 15, heroId);
+  recomputeFog(db, () => {}, mapId);
+  row = db.prepare('SELECT * FROM cell_memory WHERE map_id=? AND token_id=?').all(mapId, heroId);
+  assert.equal(row.length, 0, 'PC has no memory rows even after moving away');
+});
+
+test('player-owned tokens (owner_id != null) are never snapshotted', () => {
+  const { db } = makeTempDb();
+  const mapId = makeMap(db);
+  const heroId = addToken(db, mapId, { kind: 'pc', name: 'Hero', x: 5, y: 5, light_type: 'torch', owner_id: 1 });
+  // A player-owned NPC (e.g. familiar) — kind isn't 'pc' but owner_id is set.
+  const familiarId = addToken(db, mapId, { kind: 'npc', name: 'Owl', x: 6, y: 5, owner_id: 2 });
+  recomputeFog(db, () => {}, mapId);
+  let rows = db.prepare('SELECT * FROM cell_memory WHERE map_id=? AND token_id=?').all(mapId, familiarId);
+  assert.equal(rows.length, 0, 'player-owned token not snapshotted while lit');
+  db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(15, 15, heroId);
+  recomputeFog(db, () => {}, mapId);
+  rows = db.prepare('SELECT * FROM cell_memory WHERE map_id=? AND token_id=?').all(mapId, familiarId);
+  assert.equal(rows.length, 0, 'player-owned token still not in memory after cell goes dark');
+});
+
+test('monster memory clears when monster becomes visible elsewhere', () => {
+  const { db } = makeTempDb();
+  const mapId = makeMap(db);
+  const heroId = addToken(db, mapId, { kind: 'pc', name: 'Hero', x: 5, y: 5, light_type: 'torch', owner_id: 1 });
+  const goblinId = addToken(db, mapId, { kind: 'monster', name: 'Goblin', x: 6, y: 5 });
+  recomputeFog(db, () => {}, mapId);
+  // Hero leaves; (6,5) goes dark; stale memory for goblin remains at (6,5).
+  db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(2, 2, heroId);
+  recomputeFog(db, () => {}, mapId);
+  let stale = db.prepare('SELECT * FROM cell_memory WHERE map_id=? AND cx=? AND cy=? AND token_id=?')
+    .get(mapId, 6, 5, goblinId);
+  assert.ok(stale, 'stale memory at (6,5) before re-sighting');
+  // DM moves goblin to (3,2), which is adjacent to hero at (2,2) and therefore lit.
+  db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(3, 2, goblinId);
+  recomputeFog(db, () => {}, mapId);
+  // Goblin is now currently visible at (3,2) — all stale memory rows should be cleared.
+  stale = db.prepare('SELECT * FROM cell_memory WHERE map_id=? AND cx=? AND cy=? AND token_id=?')
+    .get(mapId, 6, 5, goblinId);
+  assert.equal(stale, undefined, 'stale (6,5) memory cleared because goblin is currently lit');
+  // A fresh snapshot exists at the goblin's current cell (it's lit, so it gets re-snapshotted).
+  const fresh = db.prepare('SELECT * FROM cell_memory WHERE map_id=? AND cx=? AND cy=? AND token_id=?')
+    .get(mapId, 3, 2, goblinId);
+  assert.ok(fresh, 'fresh snapshot recorded at goblin current cell');
+});
+
+test('two monsters in same cell: only the re-sighted one clears', () => {
+  const { db } = makeTempDb();
+  const mapId = makeMap(db);
+  const heroId = addToken(db, mapId, { kind: 'pc', name: 'Hero', x: 5, y: 5, light_type: 'torch', owner_id: 1 });
+  const gobId = addToken(db, mapId, { kind: 'monster', name: 'Goblin', x: 6, y: 5 });
+  const orcId = addToken(db, mapId, { kind: 'monster', name: 'Orc',    x: 6, y: 5 });
+  recomputeFog(db, () => {}, mapId);
+  // Hero leaves; cell goes dark with both snapshots intact.
+  db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(2, 2, heroId);
+  recomputeFog(db, () => {}, mapId);
+  let rows = db.prepare('SELECT token_id FROM cell_memory WHERE map_id=? AND cx=? AND cy=?')
+    .all(mapId, 6, 5);
+  const ids = new Set(rows.map(r => r.token_id));
+  assert.ok(ids.has(gobId) && ids.has(orcId), 'both monsters remembered at (6,5)');
+  // Move only the goblin into the hero's torch radius.
+  db.prepare('UPDATE tokens SET x=?, y=? WHERE id=?').run(3, 2, gobId);
+  recomputeFog(db, () => {}, mapId);
+  const stillGob = db.prepare('SELECT * FROM cell_memory WHERE map_id=? AND cx=? AND cy=? AND token_id=?')
+    .get(mapId, 6, 5, gobId);
+  const stillOrc = db.prepare('SELECT * FROM cell_memory WHERE map_id=? AND cx=? AND cy=? AND token_id=?')
+    .get(mapId, 6, 5, orcId);
+  assert.equal(stillGob, undefined, 'goblin memory at (6,5) cleared after re-sighting');
+  assert.ok(stillOrc, 'orc memory at (6,5) still present (orc not re-sighted)');
+});
+
 test('computeMemoryTokensFromDb only returns tokens in fogged cells', () => {
   const { db } = makeTempDb();
   const mapId = makeMap(db);
