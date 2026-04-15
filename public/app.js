@@ -168,6 +168,7 @@ function applyState() {
   $('mapW').value = m.width;
   $('mapH').value = m.height;
   $('mapFeet').value = m.cell_feet || 5;
+  $('fogMode').value = m.fog_mode || 'dungeon';
   $('approval').checked = !!state.campaign.approval_mode;
   $('doorApproval').checked = !!state.campaign.door_approval;
   $('lightApproval').checked = !!state.campaign.light_approval;
@@ -1578,7 +1579,10 @@ $('newMap').onclick = () => {
   const grid_size = parseInt(prompt('Cell px:', '50'), 10) || 50;
   const width = parseInt(widthStr, 10) || 30;
   const height = parseInt(heightStr, 10) || 20;
-  socket.emit('map:create', { name: name.trim(), grid_type, grid_size, width, height, activate: true });
+  const cell_feet = parseInt(prompt('Feet per square:', '5'), 10) || 5;
+  let fog_mode = (prompt('Fog mode (dungeon, outdoor, or none):', 'dungeon') || 'dungeon').trim().toLowerCase();
+  if (!['dungeon','outdoor','none'].includes(fog_mode)) fog_mode = 'dungeon';
+  socket.emit('map:create', { name: name.trim(), grid_type, grid_size, width, height, cell_feet, fog_mode, activate: true });
 };
 
 // ---- Undo ----
@@ -1621,6 +1625,7 @@ $('saveMap').onclick = () => {
     width: parseInt($('mapW').value, 10),
     height: parseInt($('mapH').value, 10),
     cell_feet: Math.max(1, Math.min(100, parseInt($('mapFeet').value, 10) || 5)),
+    fog_mode: $('fogMode').value || 'dungeon',
   });
 };
 $('bgFile').onchange = async () => {

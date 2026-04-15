@@ -46,6 +46,13 @@
       <div class="row"><label>Cell px</label><input id="gridSize" type="number" value="50" /></div>
       <div class="row"><label>W</label><input id="mapW" type="number" value="30" /><label>H</label><input id="mapH" type="number" value="20" /></div>
       <div class="row"><label>Feet per square <input id="mapFeet" type="number" value="5" min="1" max="100" /></label></div>
+      <div class="row"><label>Fog mode</label>
+        <select id="fogMode">
+          <option value="dungeon">dungeon</option>
+          <option value="outdoor">outdoor</option>
+          <option value="none">none</option>
+        </select>
+      </div>
       <div class="row"><button id="saveMap">Save Map</button></div>
       <div class="row"><label>BG image</label><input id="bgFile" type="file" accept="image/*" /></div>
       <div class="row"><button id="clearBg" class="dm-only">Clear background</button></div>
