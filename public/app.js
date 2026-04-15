@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked } from '/lib/logic.js';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, stackOffsets } from '/lib/logic.js';
 
 const $ = (id) => document.getElementById(id);
 const loginEl = $('login'), appEl = $('app');
@@ -714,10 +714,26 @@ function draw() {
     }
   }
 
-  // tokens — only those visible to me
-  for (const t of state.tokens) {
-    if (!tokenVisibleToMe(t)) continue;
-    drawToken(t, size);
+  // tokens — only those visible to me. Group by cell so stacked tokens
+  // can be fanned out and optionally badged with a count.
+  {
+    const byCell = new Map();
+    for (const t of state.tokens) {
+      if (!tokenVisibleToMe(t)) continue;
+      const key = `${t.x},${t.y}`;
+      let arr = byCell.get(key);
+      if (!arr) { arr = []; byCell.set(key, arr); }
+      arr.push(t);
+    }
+    for (const [, toks] of byCell) {
+      const offs = stackOffsets(toks.length, size);
+      for (let i = 0; i < toks.length; i++) {
+        drawToken(toks[i], size, offs[i]);
+      }
+      if (toks.length > 1) {
+        drawStackBadge(toks[0].x, toks[0].y, size, toks.length);
+      }
+    }
   }
 
   ctx.restore();
@@ -760,9 +776,11 @@ function drawHex(cx, cy, r) {
   ctx.stroke();
 }
 
-function drawToken(t, size) {
-  const cx = (t.x + 0.5) * size;
-  const cy = (t.y + 0.5) * size;
+function drawToken(t, size, offset) {
+  const ox = offset ? offset.dx : 0;
+  const oy = offset ? offset.dy : 0;
+  const cx = (t.x + 0.5) * size + ox;
+  const cy = (t.y + 0.5) * size + oy;
   const r = size * 0.42 * (t.size || 1);
 
   ctx.save();
@@ -807,6 +825,28 @@ function drawToken(t, size) {
     ctx.lineWidth = 1;
     ctx.strokeRect(bx, by, bw, bh);
   }
+  ctx.restore();
+}
+
+// Small circular badge showing "xN" in the top-right corner of a cell when
+// multiple tokens are stacked in it.
+function drawStackBadge(cellX, cellY, size, n) {
+  const br = size * 0.14;
+  const bx = (cellX + 1) * size - br - 2;
+  const by = cellY * size + br + 2;
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(bx, by, br, 0, Math.PI * 2);
+  ctx.fillStyle = themeColors.accent;
+  ctx.fill();
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = themeColors.ink;
+  ctx.stroke();
+  ctx.fillStyle = themeColors.paper;
+  ctx.font = `bold ${Math.max(9, Math.floor(size * 0.18))}px Georgia, serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`\u00d7${n}`, bx, by + 1);
   ctx.restore();
 }
 
