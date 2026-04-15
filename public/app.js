@@ -4,6 +4,7 @@
 // collision and light/fog BFS across both sides.
 import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius } from '/lib/logic.js?v={{LIB_VERSION}}';
 import { getCreatures, SIZE_MULTIPLIERS, sizeMultiplier } from '/lib/creatures.js?v={{LIB_VERSION}}';
+import { getObjects } from '/lib/objects.js?v={{LIB_VERSION}}';
 
 // Map a numeric token-size multiplier back to the closest D&D size category
 // label, for repopulating the Size <select> when editing an existing token.
@@ -1377,12 +1378,20 @@ const dlg = $('tokenDialog');
 let pendingPresetImage = null;
 $('addToken').onclick = () => openTokenDialog(null);
 let clearImageRequested = false;
+function presetListFor(kind) {
+  // Objects are not ruleset-keyed; creatures are. Returns [] for kinds
+  // that don't have a preset catalog (e.g. 'pc').
+  if (kind === 'object') return getObjects();
+  if (kind === 'monster' || kind === 'npc') {
+    const ruleset = state?.campaign?.ruleset || '1e';
+    return getCreatures(ruleset, kind);
+  }
+  return [];
+}
 function populatePresetList(kind) {
   const sel = $('tkPreset');
   sel.innerHTML = '<option value="">(none — manual)</option>';
-  if (kind !== 'monster' && kind !== 'npc') return;
-  const ruleset = state?.campaign?.ruleset || '1e';
-  const list = getCreatures(ruleset, kind);
+  const list = presetListFor(kind);
   for (const c of list) {
     const opt = document.createElement('option');
     opt.value = c.id;
@@ -1393,7 +1402,7 @@ function populatePresetList(kind) {
 }
 function refreshPresetRow() {
   const kind = $('tkKind').value;
-  const show = (kind === 'monster' || kind === 'npc');
+  const show = (kind === 'monster' || kind === 'npc' || kind === 'object');
   $('tkPresetRow').style.display = show ? '' : 'none';
   populatePresetList(kind);
 }
@@ -1462,8 +1471,7 @@ $('tkPreset').onchange = () => {
   const id = $('tkPreset').value;
   if (!id) return;
   const kind = $('tkKind').value;
-  const ruleset = state?.campaign?.ruleset || '1e';
-  const list = getCreatures(ruleset, kind);
+  const list = presetListFor(kind);
   const preset = list.find(c => c.id === id);
   if (!preset) return;
   $('tkName').value = preset.name;
