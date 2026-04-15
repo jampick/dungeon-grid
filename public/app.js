@@ -1205,6 +1205,10 @@ $('clearBg').onclick = () => {
   $('bgFile').value = '';
   socket.emit('map:update', { background: null });
 };
+$('btnRandomMap').onclick = () => {
+  if (!confirm('Replace all walls/doors on this map with a random dungeon? This cannot be undone globally, but each wall change is still in the undo stack for the session.')) return;
+  socket.emit('map:generate-random');
+};
 
 $('approval').onchange = () => socket.emit('campaign:settings', { approval_mode: $('approval').checked ? 1 : 0 });
 $('doorApproval').onchange = () => socket.emit('campaign:settings', { door_approval: $('doorApproval').checked ? 1 : 0 });
