@@ -9,7 +9,8 @@ import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { LIGHT_PRESETS, FACING_VEC, computeRevealed, rollDice, recomputeFog as recomputeFogLogic,
   canClearChat, createUndoStack, snapshotToken, restoreTokenRow, snapshotWalls, restoreWalls, snapshotMap, snapshotFog,
-  isReachable, shouldQueueLightChange, loginDm, loginPlayer, generateRandomDungeon, computeMemoryTokensFromDb } from './lib/logic.js';
+  isReachable, shouldQueueLightChange, loginDm, loginPlayer, generateRandomDungeon, computeMemoryTokensFromDb,
+  computeActivePlayerIds, reassignOwnedTokensToNull } from './lib/logic.js';
 import { listMaps, createMap as createMapDb, renameMap as renameMapDb, activateMap as activateMapDb, duplicateMap as duplicateMapDb, deleteMap as deleteMapDb } from './lib/maps.js';
 import { getDeploymentInfo, TRIGGER_DIR, buildTriggerFilename } from './lib/deployment.js';
 
@@ -181,6 +182,50 @@ const pendingDoors = new Map();
 // In-memory pending light changes: tokenId -> { actor, from:{light_type,light_radius}, to:{light_type,light_radius} }
 const pendingLights = new Map();
 
+// --- Active player tracking ---
+// Map<playerId, Set<socketId>> of currently connected sockets per player.
+// A player is "active" iff their set is non-empty. When the last socket for
+// a player disconnects, we start a 10s grace timer; if they don't reconnect
+// in time, all tokens they owned on the active map have owner_id cleared.
+const activePlayers = new Map();
+const playerDisconnectTimers = new Map();
+const DISCONNECT_GRACE_MS = 10_000;
+
+function addPlayerSocket(playerId, socketId) {
+  let set = activePlayers.get(playerId);
+  if (!set) { set = new Set(); activePlayers.set(playerId, set); }
+  set.add(socketId);
+  // Cancel any pending disconnect cleanup — the player came back.
+  const pending = playerDisconnectTimers.get(playerId);
+  if (pending) {
+    clearTimeout(pending);
+    playerDisconnectTimers.delete(playerId);
+  }
+}
+function removePlayerSocket(playerId, socketId) {
+  const set = activePlayers.get(playerId);
+  if (!set) return;
+  set.delete(socketId);
+  if (set.size === 0) {
+    activePlayers.delete(playerId);
+    // Schedule grace-period cleanup. If the player reconnects within the
+    // window, addPlayerSocket clears this timer.
+    const prior = playerDisconnectTimers.get(playerId);
+    if (prior) clearTimeout(prior);
+    const timer = setTimeout(() => {
+      playerDisconnectTimers.delete(playerId);
+      // Re-check: did they come back during the timer? (defense in depth)
+      if (activePlayers.has(playerId)) return;
+      const map = getActiveMap();
+      if (map) reassignOwnedTokensToNull(db, map.id, playerId);
+      broadcastState();
+    }, DISCONNECT_GRACE_MS);
+    // Don't keep the event loop alive purely for this timer.
+    if (typeof timer.unref === 'function') timer.unref();
+    playerDisconnectTimers.set(playerId, timer);
+  }
+}
+
 // In-memory undo stack for DM actions. Cleared when the active map changes.
 const undoStack = createUndoStack();
 function pushUndo(entry) { undoStack.push(entry); }
@@ -269,7 +314,8 @@ function getState() {
     try { fogSet = new Set(JSON.parse(fogRow?.data || '[]')); } catch { fogSet = new Set(); }
     memoryTokens = computeMemoryTokensFromDb(db, activeMap.id, fogSet);
   }
-  return { campaign, maps, activeMap, tokens, fog: fogRow?.data || null, walls, catalog, players, pendings, doorPendings, lightPendings, undoLabel: undoStack.topLabel(), deployment: DEPLOYMENT, explored, memoryTokens };
+  const activePlayerIds = computeActivePlayerIds(activePlayers);
+  return { campaign, maps, activeMap, tokens, fog: fogRow?.data || null, walls, catalog, players, activePlayerIds, pendings, doorPendings, lightPendings, undoLabel: undoStack.topLabel(), deployment: DEPLOYMENT, explored, memoryTokens };
 }
 
 app.get('/api/state', (req, res) => {
@@ -296,8 +342,18 @@ function requireDM(socket) { return socket.data.player.role === 'dm'; }
 
 io.on('connection', (socket) => {
   const me = socket.data.player;
+  // Track this socket against its player so the owner dropdown can filter
+  // to currently-connected players, and so we can reassign ownership when
+  // they leave (after a grace period).
+  addPlayerSocket(me.id, socket.id);
+  socket.on('disconnect', () => {
+    removePlayerSocket(me.id, socket.id);
+    broadcastState();
+  });
   socket.emit('hello', { id: me.id, name: me.name, role: me.role });
   socket.emit('state', getState());
+  // Notify everyone that the active-player set changed.
+  broadcastState();
 
   socket.on('token:move', ({ id, x, y }) => {
     const t = db.prepare('SELECT * FROM tokens WHERE id=?').get(id);

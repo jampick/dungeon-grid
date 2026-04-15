@@ -292,10 +292,26 @@ function renderTokenList() {
 function renderOwners() {
   const sel = $('tkOwner');
   sel.innerHTML = '<option value="">(none)</option>';
-  for (const p of state.players) if (p.role === 'player') {
+  const active = new Set(state.activePlayerIds || []);
+  // Active players get normal (selectable) options.
+  for (const p of state.players) if (p.role === 'player' && active.has(p.id)) {
     const o = document.createElement('option');
     o.value = p.id; o.textContent = p.name;
     sel.appendChild(o);
+  }
+  // If the token currently being edited is owned by an offline player,
+  // surface them as a disabled option so the DM can see who it belonged to.
+  const t = editingTokenId ? state.tokens.find(x => x.id === editingTokenId) : null;
+  if (t && t.owner_id && !active.has(t.owner_id)) {
+    const offline = state.players.find(p => p.id === t.owner_id);
+    if (offline) {
+      const o = document.createElement('option');
+      o.value = offline.id;
+      o.textContent = `${offline.name} (offline)`;
+      o.disabled = true;
+      o.selected = true;
+      sel.appendChild(o);
+    }
   }
 }
 
@@ -1322,9 +1338,13 @@ $('ruleset').onchange = () => socket.emit('campaign:settings', { ruleset: $('rul
 // ---- Token dialog ----
 const dlg = $('tokenDialog');
 $('addToken').onclick = () => openTokenDialog(null);
+let clearImageRequested = false;
 function openTokenDialog(id) {
   editingTokenId = id;
   const t = id ? state.tokens.find(t => t.id === id) : null;
+  // Re-render the owner dropdown so the editing-token's offline-owner
+  // (if any) gets a placeholder option.
+  renderOwners();
   $('tkName').value = t?.name || '';
   $('tkKind').value = t?.kind || 'npc';
   $('tkHp').value = t?.hp_current ?? 10;
@@ -1335,9 +1355,22 @@ function openTokenDialog(id) {
   $('tkFacing').value = t?.facing ?? 0;
   $('tkColor').value = t?.color || '#2a2a2a';
   $('tkOwner').value = t?.owner_id || '';
+  // Reset image inputs / clear-flag for the new editing session.
+  $('tkImage').value = '';
+  clearImageRequested = false;
+  $('tkClearImage').style.display = t && t.image ? '' : 'none';
   $('tkDelete').style.display = id && auth.role === 'dm' ? '' : 'none';
   dlg.showModal();
 }
+$('tkClearImage').onclick = () => {
+  clearImageRequested = true;
+  $('tkImage').value = '';
+  $('tkClearImage').style.display = 'none';
+};
+$('tkImage').addEventListener('change', () => {
+  // A newly chosen file always wins over a pending clear request.
+  if ($('tkImage').files && $('tkImage').files[0]) clearImageRequested = false;
+});
 $('tkCancel').onclick = () => dlg.close();
 $('tkSave').onclick = async () => {
   const data = {
@@ -1357,6 +1390,8 @@ $('tkSave').onclick = async () => {
     const fd = new FormData(); fd.append('file', file);
     const res = await fetch('/api/upload', { method: 'POST', body: fd, headers: { 'x-player-token': auth.token } });
     data.image = (await res.json()).url;
+  } else if (clearImageRequested) {
+    data.image = null;
   }
   if (editingTokenId) {
     data.id = editingTokenId;
