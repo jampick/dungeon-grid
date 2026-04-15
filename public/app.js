@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, cacheBustedImageUrl, lightClipRadiusPx, hasLineOfSight, findCopyOffset, shouldStartPan, isTokenSelected, TERRAIN_COLORS, TERRAIN_KINDS, pickTerrainColor } from '/lib/logic.js?v={{LIB_VERSION}}';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, cacheBustedImageUrl, lightClipRadiusPx, hasLineOfSight, findCopyOffset, shouldStartPan, isTokenSelected, TERRAIN_COLORS, TERRAIN_KINDS, pickTerrainColor, parseSessionFromPath, authStorageKey, addJoinedSession } from '/lib/logic.js?v={{LIB_VERSION}}';
 import { getCreatures, SIZE_MULTIPLIERS, sizeMultiplier } from '/lib/creatures.js?v={{LIB_VERSION}}';
 import { getObjects } from '/lib/objects.js?v={{LIB_VERSION}}';
 import { getSpells } from '/lib/spells.js?v={{LIB_VERSION}}';
@@ -24,7 +24,10 @@ function categoryForMultiplier(mult) {
 const $ = (id) => document.getElementById(id);
 const loginEl = $('login'), appEl = $('app');
 
-let auth = JSON.parse(localStorage.getItem('dg_auth') || 'null');
+// Current session context (set by router when viewing /s/<id>).
+let currentSessionId = null;
+let currentSessionInfo = null; // { id, name, has_join_password, ... }
+let auth = null; // loaded per-session once we know which session we're in
 let socket = null;
 let state = null;
 let me = null;
@@ -64,31 +67,257 @@ async function api(path, opts = {}) {
   return res.json();
 }
 
-$('btnDM').onclick = async () => {
+// --- Joined-sessions LRU (per browser) ---
+function getJoinedSessions() {
+  try { return JSON.parse(localStorage.getItem('dg_joined_sessions') || '[]'); }
+  catch { return []; }
+}
+function rememberJoinedSession(entry) {
+  const next = addJoinedSession(getJoinedSessions(), entry);
+  localStorage.setItem('dg_joined_sessions', JSON.stringify(next));
+}
+
+// --- Per-session auth persistence ---
+function loadAuthFor(sessionId) {
   try {
-    const r = await api('/api/login/dm', { method: 'POST', body: JSON.stringify({ password: $('dmpass').value, name: $('name').value || 'DM' }) });
-    auth = r; localStorage.setItem('dg_auth', JSON.stringify(auth)); enterApp();
+    const raw = localStorage.getItem(authStorageKey(sessionId));
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+function storeAuthFor(sessionId, authObj) {
+  localStorage.setItem(authStorageKey(sessionId), JSON.stringify(authObj));
+}
+function clearAuthFor(sessionId) {
+  localStorage.removeItem(authStorageKey(sessionId));
+}
+
+// --- Login handlers (wired once, act on currentSessionId) ---
+if ($('btnDM')) $('btnDM').onclick = async () => {
+  try {
+    const body = {
+      session_id: currentSessionId,
+      name: $('name').value || 'DM',
+      dm_password: $('dmpass').value,
+    };
+    const r = await api('/api/login/dm', { method: 'POST', body: JSON.stringify(body) });
+    auth = r;
+    storeAuthFor(currentSessionId, auth);
+    rememberJoinedSession({ id: currentSessionId, name: currentSessionInfo?.name || currentSessionId });
+    enterApp(currentSessionId);
   } catch (e) { $('loginErr').textContent = e.message; }
 };
-$('btnPlayer').onclick = async () => {
+if ($('btnPlayer')) $('btnPlayer').onclick = async () => {
   try {
-    const r = await api('/api/login/player', { method: 'POST', body: JSON.stringify({ name: $('name').value }) });
-    auth = r; localStorage.setItem('dg_auth', JSON.stringify(auth)); enterApp();
+    const body = {
+      session_id: currentSessionId,
+      name: $('name').value,
+    };
+    const joinpw = $('joinpass');
+    if (joinpw && joinpw.value) body.join_password = joinpw.value;
+    const r = await api('/api/login/player', { method: 'POST', body: JSON.stringify(body) });
+    auth = r;
+    storeAuthFor(currentSessionId, auth);
+    rememberJoinedSession({ id: currentSessionId, name: currentSessionInfo?.name || currentSessionId });
+    enterApp(currentSessionId);
   } catch (e) { $('loginErr').textContent = e.message; }
 };
 
-function enterApp() {
-  loginEl.classList.add('hidden');
+function enterApp(sessionId) {
+  currentSessionId = sessionId || currentSessionId;
+  if (currentSessionId) localStorage.setItem('dg_last_session', currentSessionId);
+  hideAllShells();
   appEl.classList.remove('hidden');
   me = auth;
   document.body.classList.toggle('player', auth.role !== 'dm');
   $('meInfo').textContent = `${auth.name} (${auth.role})`;
+  const label = $('sessionLabel');
+  if (label) label.textContent = currentSessionInfo?.name || '';
+  renderSessionSwitcher();
   connectSocket();
   // Auto-open help on first visit after login.
   if (!localStorage.getItem('dg_seen_help') && localStorage.getItem('dg_hide_help') !== '1') {
     setTimeout(() => openHelp(), 500);
   }
 }
+
+function hideAllShells() {
+  const ids = ['landing', 'login', 'notFound', 'app'];
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (el) el.classList.add('hidden');
+  }
+}
+
+function renderSessionSwitcher() {
+  const sel = $('sessionSwitcher');
+  if (!sel) return;
+  const list = getJoinedSessions();
+  if (list.length <= 1) { sel.classList.add('hidden'); sel.innerHTML = ''; return; }
+  sel.classList.remove('hidden');
+  sel.innerHTML = '';
+  for (const s of list) {
+    const opt = document.createElement('option');
+    opt.value = s.id;
+    opt.textContent = s.name || s.id;
+    if (s.id === currentSessionId) opt.selected = true;
+    sel.appendChild(opt);
+  }
+  sel.onchange = () => {
+    const v = sel.value;
+    if (v && v !== currentSessionId) location.href = '/s/' + v;
+  };
+}
+
+// --- Landing page ---
+function relativeTime(ts) {
+  if (!ts) return '';
+  const diff = Date.now() - Number(ts);
+  if (!isFinite(diff) || diff < 0) return '';
+  const s = Math.floor(diff / 1000);
+  if (s < 60) return s + ' sec ago';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + ' min ago';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + ' hour' + (h === 1 ? '' : 's') + ' ago';
+  const d = Math.floor(h / 24);
+  return d + ' day' + (d === 1 ? '' : 's') + ' ago';
+}
+
+async function showLanding() {
+  hideAllShells();
+  const landing = $('landing');
+  if (landing) landing.classList.remove('hidden');
+  const listEl = $('sessionList');
+  if (listEl) listEl.innerHTML = '<p class="sub">loading...</p>';
+  let sessions = [];
+  try {
+    const res = await fetch('/api/sessions');
+    sessions = await res.json();
+  } catch (e) {
+    if (listEl) listEl.innerHTML = '<p class="err">failed to load sessions</p>';
+    return;
+  }
+  if (listEl) {
+    listEl.innerHTML = '';
+    if (!sessions.length) {
+      listEl.innerHTML = '<p class="sub">no sessions yet — create one below</p>';
+    } else {
+      for (const s of sessions) {
+        const row = document.createElement('div');
+        row.className = 'session-row';
+        row.innerHTML =
+          '<span class="session-name"></span>' +
+          '<span class="session-meta"></span>' +
+          (s.has_join_password ? '<span class="session-lock" title="password required">\u{1F512}</span>' : '');
+        row.querySelector('.session-name').textContent = s.name;
+        row.querySelector('.session-meta').textContent = relativeTime(s.last_active_at);
+        row.onclick = () => { location.href = '/s/' + s.id; };
+        listEl.appendChild(row);
+      }
+    }
+  }
+  // Resume button
+  const last = localStorage.getItem('dg_last_session');
+  const resumeBtn = $('btnResumeSession');
+  if (resumeBtn) {
+    if (last && sessions.find((s) => s.id === last)) {
+      resumeBtn.classList.remove('hidden');
+      resumeBtn.textContent = 'Resume last session';
+      resumeBtn.onclick = () => { location.href = '/s/' + last; };
+    } else {
+      resumeBtn.classList.add('hidden');
+    }
+  }
+}
+
+// Create-session form
+(function wireCreateSessionForm() {
+  const form = document.getElementById('createSessionForm');
+  if (!form) return;
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const errEl = $('createErr');
+    if (errEl) errEl.textContent = '';
+    const name = $('newSessionName').value.trim();
+    const dmpw = $('newSessionDmPw').value;
+    const joinpw = $('newSessionJoinPw').value;
+    if (!name || !dmpw) {
+      if (errEl) errEl.textContent = 'name and DM password are required';
+      return;
+    }
+    try {
+      const res = await fetch('/api/sessions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, join_password: joinpw || undefined, dm_password: dmpw }),
+      });
+      if (!res.ok) {
+        let msg;
+        if (res.status === 401) msg = 'wrong DM password';
+        else if (res.status === 400) msg = 'missing fields';
+        else if (res.status === 429) msg = 'rate limited — try again shortly';
+        else {
+          try { msg = (await res.json()).error || res.statusText; }
+          catch { msg = res.statusText; }
+        }
+        if (errEl) errEl.textContent = msg;
+        return;
+      }
+      const out = await res.json();
+      location.href = '/s/' + out.id;
+    } catch (err) {
+      if (errEl) errEl.textContent = err.message || 'create failed';
+    }
+  });
+})();
+
+// --- Session shell boot ---
+async function bootSession(sessionId) {
+  currentSessionId = sessionId;
+  let info;
+  try {
+    const res = await fetch('/api/sessions/' + encodeURIComponent(sessionId));
+    if (res.status === 404) {
+      hideAllShells();
+      const nf = $('notFound');
+      if (nf) nf.classList.remove('hidden');
+      return;
+    }
+    info = await res.json();
+  } catch (e) {
+    hideAllShells();
+    const nf = $('notFound');
+    if (nf) nf.classList.remove('hidden');
+    return;
+  }
+  currentSessionInfo = info;
+  // Cached auth?
+  const cached = loadAuthFor(sessionId);
+  if (cached && cached.token) {
+    auth = cached;
+    enterApp(sessionId);
+    return;
+  }
+  // Show login form.
+  hideAllShells();
+  if (loginEl) loginEl.classList.remove('hidden');
+  const h = $('loginSessionName');
+  if (h) h.textContent = info.name || 'Dungeon Grid';
+  const row = document.querySelector('.joinpw-row');
+  if (row) row.classList.toggle('hidden', !info.has_join_password);
+}
+
+// --- Boot router ---
+(function boot() {
+  const route = parseSessionFromPath(window.location.pathname);
+  if (route.mode === 'session') {
+    bootSession(route.sessionId);
+  } else if (route.mode === 'unknown') {
+    location.href = '/';
+  } else {
+    showLanding();
+  }
+})();
 
 // ---- Help overlay ----
 function openHelp() {
@@ -137,7 +366,12 @@ if (document.readyState === 'loading') {
 
 function connectSocket() {
   socket = io({ auth: { token: auth.token } });
-  socket.on('connect_error', (e) => { alert('Auth failed: ' + e.message); localStorage.removeItem('dg_auth'); location.reload(); });
+  socket.on('connect_error', (e) => {
+    alert('Auth failed: ' + e.message);
+    if (currentSessionId) clearAuthFor(currentSessionId);
+    localStorage.removeItem('dg_auth'); // legacy key cleanup
+    location.reload();
+  });
   socket.on('state', (s) => { state = s; applyState(); });
   socket.on('token:update', ({ id, x, y }) => {
     const t = state?.tokens.find(t => t.id === id);
@@ -2261,5 +2495,4 @@ document.addEventListener('keydown', (e) => {
   renderTokenList();
 });
 
-// ---- boot ----
-if (auth) enterApp();
+// ---- boot ---- (handled by router at top of file)
