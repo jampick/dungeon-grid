@@ -10,13 +10,20 @@ test('tokenIsLightSource: PCs always light up', () => {
   assert.equal(tokenIsLightSource({ kind: 'pc' }), true);
 });
 
-test('tokenIsLightSource: monsters never light up', () => {
+test('tokenIsLightSource: monsters without a light_type do not light up', () => {
   assert.equal(tokenIsLightSource({ kind: 'monster' }), false);
 });
 
-test('tokenIsLightSource: monsters with a torch field still do not light up', () => {
-  // Scary dungeons stay scary: a monster carrying a torch does not contribute.
-  assert.equal(tokenIsLightSource({ kind: 'monster', light_type: 'torch' }), false);
+test('monster with a torch emits light', () => {
+  assert.strictEqual(tokenIsLightSource({ kind: 'monster', light_type: 'torch' }), true);
+});
+
+test('npc with a lantern emits light', () => {
+  assert.strictEqual(tokenIsLightSource({ kind: 'npc', light_type: 'lantern' }), true);
+});
+
+test('effect with light_type still does not emit', () => {
+  assert.strictEqual(tokenIsLightSource({ kind: 'effect', light_type: 'torch' }), false);
 });
 
 test('tokenIsLightSource: dropped object with a real light_type lights up', () => {
