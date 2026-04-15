@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority } from '/lib/logic.js?v={{LIB_VERSION}}';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread } from '/lib/logic.js?v={{LIB_VERSION}}';
 import { getCreatures, SIZE_MULTIPLIERS, sizeMultiplier } from '/lib/creatures.js?v={{LIB_VERSION}}';
 import { getObjects } from '/lib/objects.js?v={{LIB_VERSION}}';
 
@@ -422,10 +422,24 @@ $('toggleLeft').onclick = () => {
   $('toggleLeft').textContent = el.classList.contains('collapsed') ? '›' : '‹';
   setTimeout(() => { resizeCanvas(); draw(); }, 0);
 };
+let chatUnread = false;
+function markChatUnread(m) {
+  const right = $('right');
+  const isCollapsed = !!(right && right.classList.contains('collapsed'));
+  const selfName = (typeof auth !== 'undefined' && auth) ? auth.name : null;
+  if (!shouldMarkUnread({ isCollapsed, fromName: m && m.from, selfName })) return;
+  chatUnread = true;
+  const btn = $('toggleRight');
+  if (btn) btn.classList.add('has-unread');
+}
 $('toggleRight').onclick = () => {
   const el = $('right');
   el.classList.toggle('collapsed');
   $('toggleRight').textContent = el.classList.contains('collapsed') ? '‹' : '›';
+  if (!el.classList.contains('collapsed')) {
+    chatUnread = false;
+    $('toggleRight').classList.remove('has-unread');
+  }
   setTimeout(() => { resizeCanvas(); draw(); }, 0);
 };
 
@@ -1625,6 +1639,7 @@ function onChat(m) {
   const chat = $('chat');
   chat.appendChild(el);
   chat.scrollTop = chat.scrollHeight;
+  markChatUnread(m);
 }
 function escapeHtml(s) { return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 
