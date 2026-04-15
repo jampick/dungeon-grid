@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, stackOffsets } from '/lib/logic.js?v={{LIB_VERSION}}';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, stackOffsets, effectiveLightRadius } from '/lib/logic.js?v={{LIB_VERSION}}';
 
 const $ = (id) => document.getElementById(id);
 const loginEl = $('login'), appEl = $('app');
@@ -213,7 +213,9 @@ function renderPendings() {
     const name = t?.name || `#${p.id}`;
     const row = document.createElement('div');
     row.className = 'pending';
-    row.innerHTML = `<b>${escapeHtml(p.actor)}</b> wants to change ${escapeHtml(name)}'s light: ${escapeHtml(p.from.light_type)} → ${escapeHtml(p.to.light_type)} (radius ${p.from.light_radius} → ${p.to.light_radius})
+    const fromR = effectiveLightRadius(p.from);
+    const toR = effectiveLightRadius(p.to);
+    row.innerHTML = `<b>${escapeHtml(p.actor)}</b> wants to change ${escapeHtml(name)}'s light: ${escapeHtml(p.from.light_type)} → ${escapeHtml(p.to.light_type)} (radius ${fromR} → ${toR})
       <br/><button class="ok">Approve</button> <button class="no">Deny</button>`;
     row.querySelector('.ok').onclick = () => socket.emit('light:resolve', { approved: true, tokenId: p.id });
     row.querySelector('.no').onclick = () => socket.emit('light:resolve', { approved: false, tokenId: p.id });
