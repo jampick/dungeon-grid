@@ -54,7 +54,7 @@ body {
   padding: 12px;
   border-right: 1px solid var(--ink);
   background: var(--paper);
-  resize: horizontal;
+  position: relative;
 }
 #right {
   width: 260px;
@@ -67,11 +67,29 @@ body {
   background: var(--paper);
   display: flex;
   flex-direction: column;
-  resize: horizontal;
-  direction: rtl;
+  position: relative;
 }
-#right > * { direction: ltr; }
 #sidebar.collapsed, #right.collapsed { display: none; }
+
+/* Custom drag-to-resize handles */
+.resize-handle {
+  position: absolute;
+  top: 0;
+  width: 4px;
+  height: 100%;
+  background: var(--ink-soft, #999);
+  opacity: 0.4;
+  cursor: ew-resize;
+  z-index: 50;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+.resize-handle:hover,
+.resize-handle.dragging {
+  background: var(--ink, #222);
+  opacity: 0.8;
+}
+.resize-handle.left-edge { left: 0; }
+.resize-handle.right-edge { right: 0; }
 .collapse-btn {
   position: fixed;
   top: 50%;
