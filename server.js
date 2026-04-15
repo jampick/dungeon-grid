@@ -97,7 +97,8 @@ CREATE TABLE IF NOT EXISTS maps (
   height INTEGER DEFAULT 20,
   background TEXT,
   active INTEGER DEFAULT 0,
-  cell_feet INTEGER DEFAULT 5
+  cell_feet INTEGER DEFAULT 5,
+  fog_mode TEXT DEFAULT 'dungeon'
 );
 CREATE TABLE IF NOT EXISTS tokens (
   id INTEGER PRIMARY KEY,
@@ -187,6 +188,7 @@ for (const stmt of [
   "ALTER TABLE tokens ADD COLUMN link_map_id INTEGER",
   "ALTER TABLE tokens ADD COLUMN link_x INTEGER",
   "ALTER TABLE tokens ADD COLUMN link_y INTEGER",
+  "ALTER TABLE maps ADD COLUMN fog_mode TEXT DEFAULT 'dungeon'",
 ]) { try { db.exec(stmt); } catch {} }
 
 // Light presets / FACING_VEC / computeRevealed now live in lib/logic.js.
@@ -567,17 +569,21 @@ io.on('connection', (socket) => {
   socket.on('map:update', (data) => {
     if (!requireDM(socket)) return;
     const map = getActiveMap();
-    const fields = ['name','grid_type','grid_size','width','height','background','cell_feet'];
+    const fields = ['name','grid_type','grid_size','width','height','background','cell_feet','fog_mode'];
     const sets = [], vals = [];
-    for (const f of fields) if (f in data) { sets.push(`${f}=?`); vals.push(data[f]); }
+    for (const f of fields) if (f in data) {
+      let v = data[f];
+      if (f === 'fog_mode' && !['dungeon','outdoor','none'].includes(v)) v = 'dungeon';
+      sets.push(`${f}=?`); vals.push(v);
+    }
     if (!sets.length) return;
     const prev = snapshotMap(db, map.id);
     pushUndo({
       kind: 'map:update',
       label: 'Map settings',
       inverse: () => {
-        db.prepare('UPDATE maps SET name=?, grid_type=?, grid_size=?, width=?, height=?, background=? WHERE id=?')
-          .run(prev.name, prev.grid_type, prev.grid_size, prev.width, prev.height, prev.background, prev.id);
+        db.prepare('UPDATE maps SET name=?, grid_type=?, grid_size=?, width=?, height=?, background=?, fog_mode=? WHERE id=?')
+          .run(prev.name, prev.grid_type, prev.grid_size, prev.width, prev.height, prev.background, prev.fog_mode || 'dungeon', prev.id);
         recomputeFog(prev.id);
         broadcastState();
       },

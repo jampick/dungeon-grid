@@ -28,7 +28,8 @@ function makeTempDb() {
       height INTEGER DEFAULT 20,
       background TEXT,
       active INTEGER DEFAULT 0,
-      cell_feet INTEGER DEFAULT 5
+      cell_feet INTEGER DEFAULT 5,
+      fog_mode TEXT DEFAULT 'dungeon'
     );
     CREATE TABLE tokens (
       id INTEGER PRIMARY KEY,

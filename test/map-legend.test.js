@@ -34,6 +34,7 @@ function makeTempDb() {
   `);
   // Mirror the server.js migration block.
   try { db.exec("ALTER TABLE maps ADD COLUMN cell_feet INTEGER DEFAULT 5"); } catch {}
+  try { db.exec("ALTER TABLE maps ADD COLUMN fog_mode TEXT DEFAULT 'dungeon'"); } catch {}
   const info = db.prepare('INSERT INTO campaigns (name, created_at) VALUES (?, ?)').run('C', Date.now());
   return { db, campaignId: info.lastInsertRowid };
 }
