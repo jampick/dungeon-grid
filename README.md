@@ -9,22 +9,34 @@ A self-hosted, pencil-and-paper-aesthetic virtual tabletop for D&D. Built for sm
 ### Grid & maps
 - Hex or square grid, toggleable per map
 - Uploadable background image (scanned graph paper, hand drawings)
-- Per-map settings: grid type, cell size, width, height
+- Per-map settings: grid type, cell size, width, height, feet-per-square
+- Corner scale legend (1 sq = 5 ft) with a 4-cell scale bar
 - Map Library: DM can create, rename, duplicate, activate, delete maps. Tokens, walls, and fog are per-map; duplicating carries them along.
+- **Random dungeon generation** — DM "Generate random map" button produces procedural rooms, corridors, and doors
+- **Themed furniture** — generated rooms are themed (barracks, library, smithy, kitchen, throne room, etc.) and auto-populated with thematic objects (beds, bookshelves, anvils) from the object catalog
 
 ### Tokens
-- Drag-and-drop, named, HP/AC, color, optional uploaded image
+- Drag-and-drop, named, HP/AC, color, optional uploaded image with live preview pane and a clear-image button
 - Kinds: PC / NPC / monster / object
-- Owner assignment — which player controls which token
-- Size multiplier
-- 8-way facing; rotate with Q/E when selected
+- **Creature & object presets** — per-ruleset catalog dropdowns (monsters, NPCs, droppable furniture like chests, beds, weapon racks, barrels, braziers, fountains, thrones, altars). Picking a preset auto-fills name, HP, AC, color, image, size, and move
+- **Size categories** — Tiny / Small / Medium / Large / Huge / Gargantuan; token circle scales accordingly
+- **Race + movement** — per-ruleset race catalog with default per-race move distance; dashed range circle during drag, server-side re-validation, hard cap on single-action distance
+- **Walls block player movement** — Bresenham-path check rejects drags through walls or closed doors (DM bypasses)
+- 8-way facing with arrowhead tip; rotate with Q/E when selected
+- **Stack indicator** — fan offset and corner ×N badge when multiple tokens share a cell
+- Owner dropdown lists only currently-connected players; tokens auto-reassign to none after a 10-second disconnect grace period
 
 ### Light & fog of war
 - 1e preset light table: none, candle (2), torch (3), lantern (6), bullseye (12 cone), light spell (4), continual (12), infravision (12). Custom radius override supported.
-- Bullseye renders as a 60-degree cone in the token's facing direction.
-- Dynamic fog: server-side flood-fill from each party token's light source (kind `pc` or any token with an owner). Walls and closed doors block light; diagonal propagation requires both orthogonal gaps clear.
+- Bullseye renders as a ~60° cone in the token's facing direction (default for hooded lantern too).
+- **Three-state memory fog**: unexplored (pitch black), explored-memory (ghost tokens at last-seen positions, dim walls), currently lit (full render). Memory is shared by the whole party.
+- **Live fog preview during drag** — light updates client-side as a token moves, not just on mouseup
+- **Light source objects** — torches, lanterns, candles, braziers, campfires, light orbs keep illuminating after being dropped on the ground. Monsters carrying torches do *not* illuminate (keeps dungeons scary).
+- **Memory rules** — party tokens are excluded from memory ghosts; stale monster memory clears when a token is re-spotted somewhere else
+- **Light source approval** — optional setting requires DM to approve player light source changes
+- Dynamic fog: server-side flood-fill from each party token's light source. Walls and closed doors block light; diagonal propagation requires both orthogonal gaps clear.
 - Fog recomputes on any token move, create, update, delete, or map change.
-- DM fog brushes (reveal, hide, clear, cover-all) remain for edge cases. The next token move overrides them.
+- DM fog brushes (reveal, hide, clear, cover-all) and a Clear party memory button remain for edge cases.
 
 ### Walls & doors
 - Edge tool — click a cell edge to toggle a wall segment
@@ -34,9 +46,9 @@ A self-hosted, pencil-and-paper-aesthetic virtual tabletop for D&D. Built for sm
 - Players can click a visible door to request open/close; DM approves. Pending doors show a red `?` to everyone. Controlled by the `door_approval` campaign setting.
 
 ### Approval mode
-- Campaign setting `approval_mode` gates player token moves
+- Three independent campaign settings: `approval_mode` (moves), `door_approval` (doors), `light_approval` (player light source changes)
 - On drag, the player's token snaps back and a dashed ghost circle with connector line shows on all clients
-- DM gets a Pending actions panel (top-right) with Approve / Deny for moves and door requests
+- DM gets a Pending actions panel (top-right) with Approve / Deny for moves, door requests, and light changes
 - Pending state is in memory only; clears on server restart
 
 ### Player line of sight
@@ -44,22 +56,30 @@ A self-hosted, pencil-and-paper-aesthetic virtual tabletop for D&D. Built for sm
 - Tokens, walls, doors, and light glows in fogged cells are hidden from players
 - Players always see their own token, even in darkness
 
+### Spell effects (DM only)
+- Drop AOE markers on the map: fireball circle, cone of cold cone, lightning bolt line, and the rest of the standard catalog
+- Per-ruleset shape + radius catalog so each effect is correctly sized
+
 ### Chat & dice
 - Shared chat panel
 - Dice roller: d4, d6, d8, d10, d12, d20, d100, plus custom expressions like `2d6+3`
 - Rolls post to chat
+- **Unread indicator** — red dot on the right-panel toggle when the panel is collapsed and a new message arrives
 - DM `clear` button wipes chat for everyone
 
 ### Undo (DM only)
 - In-memory stack, 50 entries, Ctrl+Z or toolbar button
-- Covers: token move / create / update / delete, map settings, fog overrides, wall toggle / clear / rect, door cycle
+- Covers: token move / create / update / delete, map settings, fog overrides, wall toggle / clear / rect, door cycle, full random-map generation
 - Stack clears on active-map change
 - Does not cover: chat, dice, campaign settings, login flows, approval-mode pending queue, door requests
 
 ### DM vs player UI
 - Collapsible, resizable left and right sidebars (180–600 px)
+- Dark parchment theme by default; crescent-moon button toggles a brighter daylight theme
+- **Player-seen tokens filter** — sidebar token list only shows tokens the party has seen; DM sees all
 - DM toolbar exposes map library, walls, doors, fog brushes, approval queue, undo, and the deployment panel
 - Player UI hides DM tools and respects fog
+- Static `/lib` assets are served `no-cache` and `/app.js` is templated with a version stamp so deploys never serve stale JS
 
 ## Quick start
 
@@ -78,7 +98,7 @@ Requires Node 22. Open `http://localhost:3000` in two browser windows — use In
 npm test
 ```
 
-Uses Node's built-in `node:test` runner. Nine test files covering chat, dice, fog, light, maps, undo, visibility, walls, and deployment wiring.
+Uses Node's built-in `node:test` runner. 194 tests across ~35 files covering chat, dice, fog (including memory fog), light (including effective radius and rounded falloff), maps (including random generation and object-catalog placement), creature catalog, sizes, movement range, walls, doors, visibility, undo, owner reassignment on disconnect, cache headers, login, theme, and deployment wiring.
 
 ## Deployment: Synology NAS + Cloudflare Tunnel + Cloudflare Access
 
@@ -178,9 +198,11 @@ SQLite, one file at `data/grid.db`. Tables:
 - `maps` — per-campaign maps with grid type, size, background, active flag
 - `tokens` — per-map tokens with HP, AC, light, facing, owner, size, kind
 - `walls` — per-map wall and door segments keyed by cell edge
-- `fog` — per-map revealed-cell JSON blob
+- `fog` — per-map revealed-cell JSON blob (DM brush overrides)
+- `explored_cells` — per-map set of cells the party has ever seen lit (memory fog "ever-explored" layer)
+- `cell_memory` — per-cell snapshot of what was last seen at each remembered cell (memory fog ghost layer)
 - `players` — per-campaign login records with role (`dm` or `player`)
-- `catalog` — reusable drag-on object library (table exists; UI not yet wired)
+- `catalog` — reusable drag-on object library (table exists; the live object catalog ships from `lib/objects.js`)
 - `events` — audit log placeholder (table exists; not currently written)
 
 Exactly one campaign is supported today. Multi-tenant session isolation is a deferred refactor.
@@ -197,6 +219,7 @@ Express serves static files and upload endpoints; Socket.IO carries the realtime
 - **Infravision is modeled as a regular 60 ft light source.** 1e infravision is darkness-only and heat-based; the simplification is intentional.
 - **Wall occlusion is cell-edge only.** No raycasting against arbitrary line segments; walls live on grid lines.
 - **Approval-mode pending moves are not on the DM undo stack.** They use a separate queue.
+- **Catalog art is placeholder.** Creature, object, and spell-effect catalogs ship with auto-generated SVG placeholders. A future `feat-game-icons` branch will swap in CC BY 3.0 icons from game-icons.net.
 
 ## Roadmap
 
