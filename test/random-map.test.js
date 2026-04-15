@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { generateRandomDungeon } from '../lib/logic.js';
+import { generateRandomDungeon, ROOM_THEMES } from '../lib/logic.js';
 
 test('generateRandomDungeon: returns walls array for a 30x20 map with seed', () => {
   const out = generateRandomDungeon(30, 20, 12345);
@@ -67,5 +67,96 @@ test('generateRandomDungeon: every wall fits within map (cx<=W, cy<=H)', () => {
     assert.ok(w.cx <= W, `cx ${w.cx} <= W ${W}`);
     assert.ok(w.cy <= H, `cy ${w.cy} <= H ${H}`);
     assert.ok(w.cx >= 0 && w.cy >= 0, `non-negative coords`);
+  }
+});
+
+// Regression: every room's perimeter must be fully enclosed by walls or
+// doors. The previous floor-edge-delta algorithm dropped wall segments
+// where corridors brushed along a room's outer edge, leaving L-shaped
+// gaps. The fix walks each room's boundary and asserts every edge.
+test('generateRandomDungeon: every room perimeter edge is a wall or door', () => {
+  const seeds = [42, 1234, 7777, 314159, 271828];
+  for (const seed of seeds) {
+    const { walls, rooms } = generateRandomDungeon(30, 20, seed);
+    assert.ok(Array.isArray(rooms) && rooms.length > 0, `seed ${seed}: rooms returned`);
+    const wallSet = new Map(walls.map(w => [`${w.cx},${w.cy},${w.side}`, w]));
+    for (const r of rooms) {
+      const checks = [];
+      for (let x = r.x; x < r.x + r.w; x++) {
+        checks.push([`${x},${r.y},n`, 'top']);
+        checks.push([`${x},${r.y + r.h},n`, 'bottom']);
+      }
+      for (let y = r.y; y < r.y + r.h; y++) {
+        checks.push([`${r.x},${y},w`, 'left']);
+        checks.push([`${r.x + r.w},${y},w`, 'right']);
+      }
+      for (const [key, where] of checks) {
+        const e = wallSet.get(key);
+        assert.ok(e, `seed ${seed}: missing ${where} edge ${key} for room ${JSON.stringify(r)}`);
+        assert.ok(e.kind === 'wall' || e.kind === 'door',
+          `seed ${seed}: bad kind at ${key}: ${e.kind}`);
+      }
+    }
+  }
+});
+
+test('generateRandomDungeon: returns rooms and furniture arrays', () => {
+  const out = generateRandomDungeon(30, 20, 12345);
+  assert.ok(Array.isArray(out.rooms), 'has rooms[]');
+  assert.ok(Array.isArray(out.furniture), 'has furniture[]');
+  // At seed 12345 on 30x20, we reliably get >=1 themed room with furniture.
+  let furnishedRoomCount = 0;
+  for (const r of out.rooms) {
+    const inRoom = out.furniture.filter(f =>
+      f.cx >= r.x && f.cx < r.x + r.w && f.cy >= r.y && f.cy < r.y + r.h);
+    if (inRoom.length > 0) furnishedRoomCount++;
+  }
+  assert.ok(furnishedRoomCount > 0, 'at least one room has furniture');
+  // Every furniture item must lie inside *some* room interior.
+  for (const f of out.furniture) {
+    const host = out.rooms.find(r =>
+      f.cx >= r.x && f.cx < r.x + r.w && f.cy >= r.y && f.cy < r.y + r.h);
+    assert.ok(host, `furniture at (${f.cx},${f.cy}) is inside a room`);
+  }
+});
+
+test('generateRandomDungeon: themed rooms contain only theme-appropriate objects', () => {
+  // Try several seeds until we hit a barracks room. With a 30x20 map and
+  // 9 themes, a barracks shows up well within the seed budget.
+  const allowedByTheme = {
+    barracks: new Set(['bed', 'weapon_rack']),
+    storage:  new Set(['crate', 'barrel']),
+    dining:   new Set(['table', 'chair']),
+    library:  new Set(['bookshelf', 'desk']),
+    smithy:   new Set(['anvil', 'firepit', 'weapon_rack']),
+    treasure: new Set(['chest', 'statue']),
+    throne:   new Set(['throne', 'statue']),
+    shrine:   new Set(['altar', 'statue']),
+    empty:    new Set(),
+  };
+  let sawBarracksWithBed = false;
+  for (let seed = 1; seed <= 50 && !sawBarracksWithBed; seed++) {
+    const { rooms, furniture } = generateRandomDungeon(30, 20, seed);
+    for (const r of rooms) {
+      const inRoom = furniture.filter(f =>
+        f.cx >= r.x && f.cx < r.x + r.w && f.cy >= r.y && f.cy < r.y + r.h);
+      const allowed = allowedByTheme[r.theme];
+      assert.ok(allowed, `unknown theme ${r.theme}`);
+      for (const f of inRoom) {
+        assert.ok(allowed.has(f.preset),
+          `seed ${seed}: ${r.theme} room contains forbidden ${f.preset}`);
+      }
+      if (r.theme === 'barracks' && inRoom.some(f => f.preset === 'bed')) {
+        sawBarracksWithBed = true;
+      }
+    }
+  }
+  assert.ok(sawBarracksWithBed, 'expected at least one barracks-with-bed across seeds 1..50');
+});
+
+test('ROOM_THEMES exposes the 9 expected themes', () => {
+  assert.deepStrictEqual(ROOM_THEMES.length, 9);
+  for (const t of ['barracks','storage','dining','library','smithy','treasure','throne','shrine','empty']) {
+    assert.ok(ROOM_THEMES.includes(t), `missing theme ${t}`);
   }
 });

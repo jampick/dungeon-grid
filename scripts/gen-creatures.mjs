@@ -11,6 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { CREATURES } from '../lib/creatures.js';
+import { OBJECTS } from '../lib/objects.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = path.join(__dirname, '..', 'public', 'creatures');
@@ -39,5 +40,15 @@ for (const ruleset of Object.keys(CREATURES)) {
       written++;
     }
   }
+}
+// Object presets share the letter-in-circle aesthetic. Since OBJECTS are
+// not ruleset-keyed, a single pass over the catalog suffices.
+for (const o of OBJECTS) {
+  if (seen.has(o.image)) continue;
+  seen.add(o.image);
+  const base = path.basename(o.image);
+  const letter = (o.name[0] || '?').toUpperCase();
+  fs.writeFileSync(path.join(OUT_DIR, base), svg(letter, o.color));
+  written++;
 }
 console.log(`Wrote ${written} SVG files to ${OUT_DIR}`);

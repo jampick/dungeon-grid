@@ -11,6 +11,8 @@ import { LIGHT_PRESETS, FACING_VEC, computeRevealed, rollDice, recomputeFog as r
   canClearChat, createUndoStack, snapshotToken, restoreTokenRow, snapshotWalls, restoreWalls, snapshotMap, snapshotFog,
   isReachable, pathCost, shouldQueueLightChange, loginDm, loginPlayer, generateRandomDungeon, computeMemoryTokensFromDb,
   computeActivePlayerIds, reassignOwnedTokensToNull } from './lib/logic.js';
+import { getObjectById } from './lib/objects.js';
+import { sizeMultiplier } from './lib/creatures.js';
 import { listMaps, createMap as createMapDb, renameMap as renameMapDb, activateMap as activateMapDb, duplicateMap as duplicateMapDb, deleteMap as deleteMapDb } from './lib/maps.js';
 import { getDeploymentInfo, TRIGGER_DIR, buildTriggerFilename } from './lib/deployment.js';
 
@@ -727,12 +729,33 @@ io.on('connection', (socket) => {
     const map = getActiveMap();
     if (!map) return;
     const prevWalls = snapshotWalls(db, map.id);
-    const { walls: gen } = generateRandomDungeon(map.width, map.height);
+    // Snapshot existing object tokens so undo restores furniture too.
+    const prevObjectTokens = db.prepare(
+      "SELECT * FROM tokens WHERE map_id=? AND kind='object'"
+    ).all(map.id);
+    const { walls: gen, furniture } = generateRandomDungeon(map.width, map.height);
+    const insWall = db.prepare('INSERT INTO walls (map_id, cx, cy, side, kind, open) VALUES (?,?,?,?,?,?)');
+    const insTok = db.prepare(`INSERT INTO tokens
+      (map_id,kind,name,image,x,y,hp_current,hp_max,ac,light_radius,light_type,facing,color,owner_id,size,race,move)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
     const tx = db.transaction(() => {
       db.prepare('DELETE FROM walls WHERE map_id=?').run(map.id);
-      const ins = db.prepare('INSERT INTO walls (map_id, cx, cy, side, kind, open) VALUES (?,?,?,?,?,?)');
       for (const w of gen) {
-        ins.run(map.id, w.cx, w.cy, w.side, w.kind || 'wall', w.open ? 1 : 0);
+        insWall.run(map.id, w.cx, w.cy, w.side, w.kind || 'wall', w.open ? 1 : 0);
+      }
+      // Replace existing furniture tokens with newly placed ones.
+      db.prepare("DELETE FROM tokens WHERE map_id=? AND kind='object'").run(map.id);
+      for (const f of (furniture || [])) {
+        const preset = getObjectById(f.preset);
+        if (!preset) continue;
+        insTok.run(
+          map.id, 'object', preset.name, preset.image,
+          f.cx, f.cy,
+          preset.hp || 1, preset.hp || 1, preset.ac || 10,
+          0, 'none', 0,
+          preset.color || '#2a2a2a', null,
+          sizeMultiplier(preset.size), null, 0
+        );
       }
     });
     tx();
@@ -740,7 +763,19 @@ io.on('connection', (socket) => {
       kind: 'map:generate-random',
       label: 'Generate random map',
       inverse: () => {
-        restoreWalls(db, map.id, prevWalls);
+        const restore = db.transaction(() => {
+          restoreWalls(db, map.id, prevWalls);
+          db.prepare("DELETE FROM tokens WHERE map_id=? AND kind='object'").run(map.id);
+          const restoreIns = db.prepare(`INSERT INTO tokens
+            (id,map_id,kind,name,image,x,y,hp_current,hp_max,ac,light_radius,light_type,facing,color,owner_id,size,race,move)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+          for (const r of prevObjectTokens) {
+            restoreIns.run(r.id, r.map_id, r.kind, r.name, r.image, r.x, r.y,
+              r.hp_current, r.hp_max, r.ac, r.light_radius, r.light_type, r.facing,
+              r.color, r.owner_id, r.size, r.race, r.move);
+          }
+        });
+        restore();
         recomputeFog(map.id);
         io.emit('walls:state', db.prepare('SELECT cx, cy, side, kind, open FROM walls WHERE map_id=?').all(map.id));
         broadcastState();
