@@ -1,0 +1,20 @@
+# Copy to docker-compose.yml and edit DM_PASSWORD before running.
+# Pulls the prebuilt multi-arch image from GitHub Container Registry.
+services:
+  dungeon-grid:
+    image: ghcr.io/jampick/dungeon-grid:latest
+    restart: unless-stopped
+    environment:
+      DM_PASSWORD: your-secret
+      PORT: 3000
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+    ports:
+      - "127.0.0.1:3000:3000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp

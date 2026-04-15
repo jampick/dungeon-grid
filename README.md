@@ -92,6 +92,38 @@ DM_PASSWORD=your-secret npm start
 
 Requires Node 22. Open `http://localhost:3000` in two browser windows — use Incognito for the second so they do not share localStorage. Log in as DM with the password set above; join as a player by name in the other window.
 
+## Deploy via Docker (easiest)
+
+Pull a prebuilt multi-arch image and run it — no cloning required. The image auto-builds on every push to `main` via GitHub Actions and supports `linux/amd64` and `linux/arm64` (Intel NASes, Raspberry Pi, Synology ARM, Apple Silicon).
+
+```yaml
+# docker-compose.yml
+services:
+  dungeon-grid:
+    image: ghcr.io/jampick/dungeon-grid:latest
+    restart: unless-stopped
+    environment:
+      DM_PASSWORD: your-secret
+      PORT: 3000
+    volumes:
+      - ./data:/app/data
+      - ./uploads:/app/uploads
+    ports:
+      - "127.0.0.1:3000:3000"
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
+```
+
+`docker compose up -d` and visit http://localhost:3000. A ready-to-copy version of this file lives at [`docker-compose.example.yml`](docker-compose.example.yml).
+
+> **First-time ghcr.io auth:** the image is published as PRIVATE by default until the maintainer flips it to public on https://github.com/jampick/dungeon-grid/pkgs/container/dungeon-grid. If your `docker compose pull` gets a 403/unauthorized, either wait for it to be made public or `docker login ghcr.io` with a GitHub PAT that has `read:packages`.
+
+A Docker Hub mirror is also published at `jampick/dungeon-grid` once the maintainer configures the `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` repo secrets.
+
 ## Running the tests
 
 ```bash
@@ -108,7 +140,12 @@ The app is designed to run as a single Docker container on a NAS (Synology, but 
 - **Cloudflare Tunnel** punches an outbound-only connection from the NAS to Cloudflare. The app never listens on a public interface.
 - **`DM_PASSWORD`** gates the DM role inside the app. Defense in depth — set it to something strong even with Access in front.
 
-### docker-compose.yml
+You can deploy the NAS container in two ways:
+
+1. **Pull the published image** (new, easier) — use `image: ghcr.io/jampick/dungeon-grid:latest` in your compose file and `docker compose pull && docker compose up -d`. No source checkout or local build required. See [Deploy via Docker](#deploy-via-docker-easiest) above. The image is private on ghcr.io until the maintainer flips it to public; authenticate with a GitHub PAT (`read:packages`) the first time if needed.
+2. **Build from source** (existing, below) — clone the repo to the NAS and let `docker compose build` run the `Dockerfile`. This is what the existing `update.sh` polling loop uses and is still fully supported.
+
+### docker-compose.yml (build from source)
 
 ```yaml
 services:
@@ -231,7 +268,7 @@ This project uses branch-per-feature with test-gated merges.
 
 ## Credits
 
-Creature, object, and spell icons are from [game-icons.net](https://game-icons.net/) under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/). See [CREDITS.md](CREDITS.md) for per-icon attribution.
+Creature, object, and spell icons are from [game-icons.net](https://game-icons.net/) under [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/). See [CREDITS.md](CREDITS.md) for per-icon attribution. The published container image bundles these assets and is therefore CC-BY-3.0-compatible; attribution is preserved in `CREDITS.md` inside the image.
 
 ## License
 
