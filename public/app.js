@@ -182,6 +182,7 @@ function applyState() {
   $('showOtherHp').checked = !!state.campaign.show_other_hp;
   $('ruleset').value = state.campaign.ruleset || '1e';
   renderPartyLeaderSelect();
+  renderPartyPanel();
   loadFog(state.fog);
   loadExplored(state.explored || []);
   loadMemoryTokens(state.memoryTokens || []);
@@ -311,6 +312,7 @@ function renderTokenList() {
     playerId: me ? me.playerId : null,
     isDM,
   });
+  const leaderId = state.campaign?.party_leader_id ?? null;
   for (const t of state.tokens) {
     if (!isDM && !seenIds.has(t.id)) continue;
     const row = document.createElement('div');
@@ -319,7 +321,10 @@ function renderTokenList() {
     dot.className = 'dot';
     dot.style.backgroundColor = t.color || '';
     const name = document.createElement('span');
-    name.textContent = t.name || '';
+    // Prefix the party leader's row with a crown glyph so every viewer can
+    // tell which PC is the current leader at a glance.
+    const crown = (leaderId && t.id === leaderId) ? '\u{1F451} ' : '';
+    name.textContent = crown + (t.name || '');
     row.appendChild(dot);
     row.appendChild(name);
     row.onclick = () => {
@@ -1270,6 +1275,21 @@ function drawToken(t, size, offset) {
     ctx.strokeRect(bx, by, bw, bh);
   }
 
+  // Party-leader crown: small golden glyph at the top-right of the circle
+  // so every viewer can see which token is the current leader. Drawn
+  // after the body/border/HP so it isn't clipped by the portrait mask.
+  if (state?.campaign?.party_leader_id && t.id === state.campaign.party_leader_id) {
+    const crownX = cx + r * 0.7;
+    const crownY = cy - r * 0.7;
+    ctx.save();
+    ctx.font = `${Math.max(10, Math.floor(size * 0.35))}px serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = themeColors.accent || '#d4af37';
+    ctx.fillText('\u{1F451}', crownX, crownY);
+    ctx.restore();
+  }
+
   // Selection halo: dashed accent ring drawn on top of the token so
   // the user sees which token is currently selected (mirrors the
   // sidebar row highlight). Drawn after the body/border/HP so it isn't
@@ -1416,7 +1436,14 @@ canvas.addEventListener('mousedown', (e) => {
     if (auth.role === 'dm') {
       chosen = pickByKindPriority(candidates, ['pc', 'npc', 'monster', 'object', 'effect']);
     } else {
+      // Normal: players can only pick their own token.
+      // Party-leader exception: if this player owns the campaign's leader
+      // token, they may also pick any PC (used to directly reposition
+      // followers without going through auto-follow-on-drag).
       chosen = candidates.find((t) => t.owner_id === me.playerId) || null;
+      if (!chosen && isCurrentUserPartyLeader()) {
+        chosen = candidates.find((t) => t.kind === 'pc') || null;
+      }
     }
   }
   if (chosen) {
@@ -1430,10 +1457,12 @@ canvas.addEventListener('mousedown', (e) => {
     // the snapshot to recompute follower offsets at apply time.
     let followerSnapshot = null;
     const leaderId = state.campaign?.party_leader_id ?? null;
-    if (leaderId && chosen.id === leaderId
+    const formationModeOn = localStorage.getItem('dg_formation_mode') !== 'off';
+    if (formationModeOn && leaderId && chosen.id === leaderId
         && (auth.role === 'dm' || chosen.owner_id === me.playerId)) {
+      const activeMapId = state.activeMap && state.activeMap.id;
       followerSnapshot = state.tokens
-        .filter(t => t.kind === 'pc' && t.id !== chosen.id)
+        .filter(t => t.kind === 'pc' && t.id !== chosen.id && t.map_id === activeMapId)
         .map(t => ({ id: t.id, x: t.x, y: t.y }));
     }
     dragging = {
@@ -1716,6 +1745,66 @@ $('doorApproval').onchange = () => socket.emit('campaign:settings', { door_appro
 $('lightApproval').onchange = () => socket.emit('campaign:settings', { light_approval: $('lightApproval').checked ? 1 : 0 });
 $('showOtherHp').onchange = () => socket.emit('campaign:settings', { show_other_hp: $('showOtherHp').checked ? 1 : 0 });
 $('ruleset').onchange = () => socket.emit('campaign:settings', { ruleset: $('ruleset').value });
+// Returns true if the current user is the owning player of the campaign's
+// party-leader token (or is the DM — DMs see the party panel too, but this
+// helper is about the leader-exception permission).
+function isCurrentUserPartyLeader() {
+  const leaderId = state?.campaign?.party_leader_id;
+  if (!leaderId || !me) return false;
+  const leader = (state.tokens || []).find(t => t.id === leaderId);
+  if (!leader) return false;
+  return leader.owner_id && leader.owner_id === me.playerId;
+}
+
+// Sidebar "Party Formation" panel. Visible to DM and to the leader's
+// owning player. Shows current followers (other PCs on the active map)
+// and their offsets relative to the leader, plus a formation-mode toggle
+// persisted in localStorage.
+function renderPartyPanel() {
+  const panel = $('partyPanel');
+  if (!panel) return;
+  const leaderId = state?.campaign?.party_leader_id ?? null;
+  const isDM = auth && auth.role === 'dm';
+  const isLeader = isCurrentUserPartyLeader();
+  if (!isDM && !isLeader) { panel.style.display = 'none'; return; }
+  panel.style.display = '';
+  const body = $('partyPanelBody');
+  if (!body) return;
+  if (!leaderId) {
+    body.innerHTML = '<p class="hint">No party leader assigned. The DM can set one in the Settings panel.</p>';
+    return;
+  }
+  const leader = (state.tokens || []).find(t => t.id === leaderId);
+  if (!leader) {
+    body.innerHTML = '<p class="hint">Party leader token is not on the current map.</p>';
+    return;
+  }
+  const activeMapId = state.activeMap && state.activeMap.id;
+  const followers = (state.tokens || [])
+    .filter(t => t.kind === 'pc' && t.id !== leaderId && t.map_id === activeMapId);
+  const modeOn = localStorage.getItem('dg_formation_mode') !== 'off';
+  const esc = (s) => String(s ?? '').replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+  const rows = followers.length
+    ? followers.map(f => {
+        const dx = f.x - leader.x, dy = f.y - leader.y;
+        const sx = (dx >= 0 ? '+' : '') + dx;
+        const sy = (dy >= 0 ? '+' : '') + dy;
+        return `<div class="tk"><span class="dot" style="background:${esc(f.color || '')}"></span><span>${esc(f.name || 'PC')} (offset ${sx}, ${sy})</span></div>`;
+      }).join('')
+    : '<p class="hint">No other PCs on this map to follow.</p>';
+  body.innerHTML = `
+    <div class="row"><label><input type="checkbox" id="formationModeToggle" ${modeOn ? 'checked' : ''}/> Formation mode (leader drags pull followers)</label></div>
+    <div><strong>Leader:</strong> <span class="crown">&#128081;</span> ${esc(leader.name || 'PC')}</div>
+    <div class="party-followers">${rows}</div>
+  `;
+  const toggle = $('formationModeToggle');
+  if (toggle) {
+    toggle.onchange = () => {
+      localStorage.setItem('dg_formation_mode', toggle.checked ? 'on' : 'off');
+    };
+  }
+}
+
 function renderPartyLeaderSelect() {
   const sel = $('partyLeader');
   if (!sel) return;
