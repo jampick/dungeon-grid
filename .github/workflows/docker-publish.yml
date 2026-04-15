@@ -33,35 +33,62 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # Docker Hub publishing is gated by a repository variable so the
+      # workflow-level `if:` doesn't need to reference secrets (which is
+      # not allowed in Actions). To turn on Docker Hub publishing:
+      #   1. Add secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN
+      #   2. Add repository variable DOCKERHUB_ENABLED=true
       - name: Log in to Docker Hub
-        if: ${{ vars.DOCKERHUB_ENABLED == 'true' || secrets.DOCKERHUB_USERNAME != '' }}
-        continue-on-error: true
+        if: vars.DOCKERHUB_ENABLED == 'true'
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract metadata
-        id: meta
+      - name: Extract metadata (ghcr.io)
+        id: meta_ghcr
         uses: docker/metadata-action@v5
         with:
-          images: |
-            ${{ env.GHCR_IMAGE }}
-            ${{ env.DOCKERHUB_IMAGE }}
+          images: ${{ env.GHCR_IMAGE }}
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=sha,prefix=sha-,format=short
-            type=schedule,pattern={{date 'YYYYMMDD'}}
             type=raw,value={{date 'YYYYMMDD'}}
 
-      - name: Build and push
+      - name: Build and push to ghcr.io
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ steps.meta_ghcr.outputs.tags }}
+          labels: ${{ steps.meta_ghcr.outputs.labels }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
+            GIT_SUBJECT=${{ github.event.head_commit.message }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Extract metadata (Docker Hub)
+        if: vars.DOCKERHUB_ENABLED == 'true'
+        id: meta_dh
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_IMAGE }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=sha,prefix=sha-,format=short
+            type=raw,value={{date 'YYYYMMDD'}}
+
+      - name: Build and push to Docker Hub
+        if: vars.DOCKERHUB_ENABLED == 'true'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_dh.outputs.tags }}
+          labels: ${{ steps.meta_dh.outputs.labels }}
           build-args: |
             GIT_SHA=${{ github.sha }}
             GIT_SUBJECT=${{ github.event.head_commit.message }}
@@ -71,6 +98,3 @@ jobs:
 # Note: on first run, the ghcr.io image is published as PRIVATE by default.
 # To make it public, visit https://github.com/jampick/dungeon-grid/pkgs/container/dungeon-grid
 # and change the visibility in Package settings. This is a one-time manual step.
-#
-# Docker Hub publishing is gated on the DOCKERHUB_USERNAME / DOCKERHUB_TOKEN secrets.
-# Until those are set, the workflow still publishes to ghcr.io successfully.
