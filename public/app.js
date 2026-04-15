@@ -389,13 +389,73 @@ function draw() {
     ctx.fill();
   }
 
-  // fog overlay — opaque for players (hides bg/walls), translucent for DM
+  // fog overlay — rounded-light version.
+  // Strategy (Option B, simplified): draw a solid fog rectangle over the
+  // entire map, then carve out a soft radial hole for each party light
+  // source using destination-out. The carve is clipped to the union of
+  // server-visible cells so walls still occlude (the server's BFS is the
+  // source of truth — see computeFog in lib/logic.js).
   if (fogCells.size) {
-    ctx.fillStyle = isDM ? 'rgba(42,42,42,0.55)' : 'rgba(30,26,20,1)';
-    for (const key of fogCells) {
-      const [fx, fy] = key.split(',').map(Number);
-      ctx.fillRect(fx * size, fy * size, size, size);
+    // Build visible-cell rects once per frame (avoid per-light allocation).
+    const visibleRects = [];
+    for (let vx = 0; vx < m.width; vx++) {
+      for (let vy = 0; vy < m.height; vy++) {
+        if (!fogCells.has(`${vx},${vy}`)) {
+          visibleRects.push(vx, vy);
+        }
+      }
     }
+
+    ctx.save();
+    // Offscreen-style layering: render fog into its own compositing group by
+    // drawing solid fog, then destination-out carving, all within save/restore.
+    ctx.fillStyle = isDM ? 'rgba(42,42,42,0.55)' : 'rgba(30,26,20,1)';
+    ctx.fillRect(0, 0, W, H);
+
+    if (visibleRects.length) {
+      // Clip to union of visible cells so light cannot bleed past walls.
+      ctx.beginPath();
+      for (let i = 0; i < visibleRects.length; i += 2) {
+        const vx = visibleRects[i], vy = visibleRects[i + 1];
+        ctx.rect(vx * size, vy * size, size, size);
+      }
+      ctx.clip();
+
+      ctx.globalCompositeOperation = 'destination-out';
+      // Carve a soft circle for each party light source. Use a radial
+      // gradient that is fully opaque in the center (fully erases fog) and
+      // fades out toward the edge for a smooth lit/fogged transition.
+      for (const t of state.tokens) {
+        const isParty = t.kind === 'pc' || t.owner_id != null;
+        if (!isParty) continue;
+        if (!tokenVisibleToMe(t)) continue;
+        const preset = LIGHT_PRESETS[t.light_type || 'none'] || LIGHT_PRESETS.none;
+        const rCells = t.light_radius > 0 ? t.light_radius : preset.radius;
+        if (rCells <= 0) continue;
+        // Extend carve radius slightly past the server's hard cell radius so
+        // the soft falloff lands on the cell boundary rather than inside it.
+        const r = (rCells + 0.5) * size;
+        const cx = (t.x + 0.5) * size, cy = (t.y + 0.5) * size;
+        const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        g.addColorStop(0,    'rgba(0,0,0,1)');
+        g.addColorStop(0.65, 'rgba(0,0,0,0.95)');
+        g.addColorStop(1,    'rgba(0,0,0,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        if (preset.cone) {
+          const facing = FACING_RAD[(t.facing || 0) % 8];
+          const half = Math.PI / 3;
+          ctx.moveTo(cx, cy);
+          ctx.arc(cx, cy, r, facing - half, facing + half);
+          ctx.closePath();
+        } else {
+          ctx.arc(cx, cy, r, 0, Math.PI * 2);
+        }
+        ctx.fill();
+      }
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    ctx.restore();
   }
 
   // walls & doors — visible if either bordering cell is visible (for players)
