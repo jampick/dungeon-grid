@@ -11,7 +11,7 @@ import { LIGHT_PRESETS, FACING_VEC, computeRevealed, rollDice, recomputeFog as r
   canClearChat, createUndoStack, snapshotToken, restoreTokenRow, snapshotWalls, restoreWalls, snapshotMap, snapshotFog,
   isReachable, pathCost, shouldQueueLightChange, loginDm, loginPlayer, generateRandomDungeon, computeMemoryTokensFromDb,
   computeActivePlayerIds, reassignOwnedTokensToNull,
-  applyTerrainPaint, applyTerrainClear, computeFollowerTargets } from './lib/logic.js';
+  applyTerrainPaint, applyTerrainClear, computeFollowerTargets, canMoveToken } from './lib/logic.js';
 import { getObjectById } from './lib/objects.js';
 import { sizeMultiplier } from './lib/creatures.js';
 import { listMaps, createMap as createMapDb, renameMap as renameMapDb, activateMap as activateMapDb, duplicateMap as duplicateMapDb, deleteMap as deleteMapDb, performTravel, nullLinksToMap } from './lib/maps.js';
@@ -398,7 +398,14 @@ io.on('connection', (socket) => {
   socket.on('token:move', ({ id, x, y }) => {
     const t = db.prepare('SELECT * FROM tokens WHERE id=?').get(id);
     if (!t) return;
-    if (me.role !== 'dm' && t.owner_id !== me.id) return;
+    // Permission: DM, owner, OR party-leader-owning-player moving a PC.
+    // The leader exception lets the lead player reposition other party
+    // members directly (not just via auto-follow-on-drag).
+    const campaignRow0 = db.prepare('SELECT * FROM campaigns ORDER BY id LIMIT 1').get();
+    const leaderToken0 = campaignRow0 && campaignRow0.party_leader_id
+      ? db.prepare('SELECT * FROM tokens WHERE id=?').get(campaignRow0.party_leader_id)
+      : null;
+    if (!canMoveToken(me, t, campaignRow0, leaderToken0)) return;
     // Defense in depth: a malicious (or buggy) player client could bypass the
     // client-side wall check and emit any x,y. DMs move freely — they need to
     // reposition tokens past walls — but players must have a wall-aware path
