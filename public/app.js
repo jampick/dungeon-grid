@@ -260,6 +260,61 @@ $('toggleRight').onclick = () => {
   setTimeout(() => { resizeCanvas(); draw(); }, 0);
 };
 
+// --- Side panel resize handles ---
+// Pure clamp (mirrors lib/logic.js clampPanelWidth — tested there).
+function _clampPanelW(w, min = 180, max = 600) {
+  const n = Number(w);
+  if (!Number.isFinite(n)) return min;
+  if (n < min) return min;
+  if (n > max) return max;
+  return n;
+}
+function initPanelResize(panelId, handleId, storageKey, edge, defaultW) {
+  const panel = document.getElementById(panelId);
+  const handle = document.getElementById(handleId);
+  if (!panel || !handle) return;
+  // Restore persisted width.
+  try {
+    const saved = localStorage.getItem(storageKey);
+    if (saved != null) panel.style.width = _clampPanelW(parseFloat(saved), 180, 600) + 'px';
+    else panel.style.width = defaultW + 'px';
+  } catch (_) {
+    panel.style.width = defaultW + 'px';
+  }
+  let startX = 0, startW = 0, dragging = false;
+  handle.addEventListener('mousedown', (e) => {
+    dragging = true;
+    startX = e.clientX;
+    startW = panel.getBoundingClientRect().width;
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'ew-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - startX;
+    // Left panel: right edge -> wider when dragging right (positive dx).
+    // Right panel: left edge -> wider when dragging left (negative dx).
+    const raw = edge === 'right' ? startW + dx : startW - dx;
+    const w = _clampPanelW(raw, 180, 600);
+    panel.style.width = w + 'px';
+  });
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    try {
+      const w = panel.getBoundingClientRect().width;
+      localStorage.setItem(storageKey, String(Math.round(w)));
+    } catch (_) {}
+  });
+}
+initPanelResize('sidebar', 'sidebarResize', 'dg_sidebar_w', 'right', 240);
+initPanelResize('right',   'rightResize',   'dg_right_w',   'left',  260);
+
 function worldToScreen(x, y) {
   return { x: x * view.scale + view.ox, y: y * view.scale + view.oy };
 }
