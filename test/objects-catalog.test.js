@@ -43,6 +43,29 @@ test('OBJECTS catalog includes light source presets with valid light_type', () =
   }
 });
 
+test('OBJECTS catalog includes outdoor scenery presets', () => {
+  const outdoorIds = [
+    'tree_pine', 'tree_oak', 'tree_dead', 'bush', 'boulder', 'rock_small',
+    'well', 'tent', 'signpost', 'haystack', 'campfire_out', 'stump',
+    'mushroom', 'grave',
+  ];
+  const validSizes = new Set(['tiny', 'small', 'medium', 'large', 'huge', 'gargantuan']);
+  for (const id of outdoorIds) {
+    const o = getObjectById(id);
+    assert.ok(o, `missing outdoor preset ${id}`);
+    assert.ok(typeof o.name === 'string' && o.name.length, `${id}: name`);
+    assert.ok(typeof o.color === 'string' && o.color.startsWith('#'), `${id}: color`);
+    assert.ok(typeof o.image === 'string' && o.image.startsWith('/creatures/'), `${id}: image`);
+    assert.ok(validSizes.has(o.size), `${id}: size "${o.size}"`);
+    assert.ok(Number.isFinite(o.hp), `${id}: hp`);
+    assert.ok(Number.isFinite(o.ac), `${id}: ac`);
+  }
+  const fire = getObjectById('campfire_out');
+  assert.ok(fire.light_type, 'campfire_out light_type');
+  assert.ok(Object.keys(LIGHT_PRESETS).includes(fire.light_type),
+    `campfire_out light_type "${fire.light_type}" not in LIGHT_PRESETS`);
+});
+
 test('every object preset has a generated SVG file on disk', () => {
   for (const o of OBJECTS) {
     const p = path.join(PUB, path.basename(o.image));
