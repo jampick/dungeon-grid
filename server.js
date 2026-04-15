@@ -88,7 +88,8 @@ CREATE TABLE IF NOT EXISTS maps (
   width INTEGER DEFAULT 30,
   height INTEGER DEFAULT 20,
   background TEXT,
-  active INTEGER DEFAULT 0
+  active INTEGER DEFAULT 0,
+  cell_feet INTEGER DEFAULT 5
 );
 CREATE TABLE IF NOT EXISTS tokens (
   id INTEGER PRIMARY KEY,
@@ -169,6 +170,7 @@ for (const stmt of [
   "ALTER TABLE campaigns ADD COLUMN light_approval INTEGER DEFAULT 1",
   "ALTER TABLE tokens ADD COLUMN race TEXT",
   "ALTER TABLE tokens ADD COLUMN move INTEGER DEFAULT 6",
+  "ALTER TABLE maps ADD COLUMN cell_feet INTEGER DEFAULT 5",
 ]) { try { db.exec(stmt); } catch {} }
 
 // Light presets / FACING_VEC / computeRevealed now live in lib/logic.js.
@@ -512,7 +514,7 @@ io.on('connection', (socket) => {
   socket.on('map:update', (data) => {
     if (!requireDM(socket)) return;
     const map = getActiveMap();
-    const fields = ['name','grid_type','grid_size','width','height','background'];
+    const fields = ['name','grid_type','grid_size','width','height','background','cell_feet'];
     const sets = [], vals = [];
     for (const f of fields) if (f in data) { sets.push(`${f}=?`); vals.push(data[f]); }
     if (!sets.length) return;

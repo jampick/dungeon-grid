@@ -27,7 +27,8 @@ function makeTempDb() {
       width INTEGER DEFAULT 30,
       height INTEGER DEFAULT 20,
       background TEXT,
-      active INTEGER DEFAULT 0
+      active INTEGER DEFAULT 0,
+      cell_feet INTEGER DEFAULT 5
     );
     CREATE TABLE tokens (
       id INTEGER PRIMARY KEY,
