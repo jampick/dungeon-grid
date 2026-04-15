@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius } from '/lib/logic.js?v={{LIB_VERSION}}';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, formatLegendText } from '/lib/logic.js?v={{LIB_VERSION}}';
 import { getCreatures, SIZE_MULTIPLIERS, sizeMultiplier } from '/lib/creatures.js?v={{LIB_VERSION}}';
 import { getObjects } from '/lib/objects.js?v={{LIB_VERSION}}';
 
@@ -166,6 +166,7 @@ function applyState() {
   $('gridSize').value = m.grid_size;
   $('mapW').value = m.width;
   $('mapH').value = m.height;
+  $('mapFeet').value = m.cell_feet || 5;
   $('approval').checked = !!state.campaign.approval_mode;
   $('doorApproval').checked = !!state.campaign.door_approval;
   $('lightApproval').checked = !!state.campaign.light_approval;
@@ -864,6 +865,83 @@ function draw() {
   }
 
   ctx.restore();
+
+  // Screen-space scale legend (bottom-right corner).
+  // Reset to device-pixel transform so the legend stays put while panning/zooming.
+  drawScaleLegend(m, size);
+}
+
+function drawScaleLegend(m, gridSize) {
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.width / dpr;
+  const cssH = canvas.height / dpr;
+  const cellFeet = m.cell_feet || 5;
+
+  ctx.save();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+  const pad = 12;
+  const boxW = 140;
+  const boxH = 44;
+  // Clamp so the legend is always visible on tiny canvases.
+  let x = cssW - boxW - pad;
+  let y = cssH - boxH - pad;
+  if (x < pad) x = Math.max(0, (cssW - boxW) / 2);
+  if (y < pad) y = Math.max(0, (cssH - boxH) / 2);
+
+  // Rounded rect background (paper @ 80%) with ink border.
+  const r = 6;
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + boxW - r, y);
+  ctx.quadraticCurveTo(x + boxW, y, x + boxW, y + r);
+  ctx.lineTo(x + boxW, y + boxH - r);
+  ctx.quadraticCurveTo(x + boxW, y + boxH, x + boxW - r, y + boxH);
+  ctx.lineTo(x + r, y + boxH);
+  ctx.quadraticCurveTo(x, y + boxH, x, y + boxH - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+  ctx.globalAlpha = 0.8;
+  ctx.fillStyle = themeColors.paper;
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = themeColors.ink;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Text: "1 sq = N ft"
+  ctx.fillStyle = themeColors.ink;
+  ctx.font = '11px Georgia, serif';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'top';
+  ctx.fillText(formatLegendText(cellFeet), x + 10, y + 7);
+
+  // Scale bar: 4 cells wide at the current zoom, clamped to box width.
+  const cells = 4;
+  const maxBar = boxW - 20 - 40; // leave room for label on the right
+  let barLen = cells * gridSize * view.scale;
+  if (barLen > maxBar) barLen = maxBar;
+  if (barLen < 4) barLen = 4;
+  const barX = x + 10;
+  const barY = y + 28;
+  ctx.strokeStyle = themeColors.ink;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(barX, barY);
+  ctx.lineTo(barX + barLen, barY);
+  ctx.stroke();
+  // End ticks
+  ctx.beginPath();
+  ctx.moveTo(barX, barY - 3); ctx.lineTo(barX, barY + 3);
+  ctx.moveTo(barX + barLen, barY - 3); ctx.lineTo(barX + barLen, barY + 3);
+  ctx.stroke();
+  ctx.lineWidth = 1;
+
+  ctx.textBaseline = 'middle';
+  ctx.fillText(`${cells * cellFeet} ft`, barX + barLen + 6, barY);
+
+  ctx.restore();
 }
 
 function drawSquareGrid(w, h, s) {
@@ -1347,6 +1425,7 @@ $('saveMap').onclick = () => {
     grid_size: parseInt($('gridSize').value, 10),
     width: parseInt($('mapW').value, 10),
     height: parseInt($('mapH').value, 10),
+    cell_feet: Math.max(1, Math.min(100, parseInt($('mapFeet').value, 10) || 5)),
   });
 };
 $('bgFile').onchange = async () => {
