@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText } from '/lib/logic.js?v={{LIB_VERSION}}';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, shouldStartPan } from '/lib/logic.js?v={{LIB_VERSION}}';
 import { getCreatures, SIZE_MULTIPLIERS, sizeMultiplier } from '/lib/creatures.js?v={{LIB_VERSION}}';
 import { getObjects } from '/lib/objects.js?v={{LIB_VERSION}}';
 import { getSpells } from '/lib/spells.js?v={{LIB_VERSION}}';
@@ -1299,8 +1299,12 @@ canvas.addEventListener('mousedown', (e) => {
     return;
   }
 
-  if (e.button === 2 || e.shiftKey) {
+  // Explicit pan modifier: shift, middle-click, or right-click.
+  // Must run before token hit-test so users can pan even when the
+  // cursor happens to be over a token.
+  if (shouldStartPan(e)) {
     dragging = { mode: 'pan', sx, sy, ox: view.ox, oy: view.oy };
+    canvas.style.cursor = 'grabbing';
     return;
   }
 
@@ -1358,10 +1362,17 @@ canvas.addEventListener('mousedown', (e) => {
       return;
     }
   }
-  dragging = { mode: 'pan', sx, sy, ox: view.ox, oy: view.oy };
+  // Map is "locked" against accidental panning: plain left-click on
+  // empty space is a no-op. Pan requires an explicit modifier
+  // (shift / middle / right) — handled by the shouldStartPan branch
+  // above.
 });
 canvas.addEventListener('mousemove', (e) => {
-  if (!dragging) return;
+  if (!dragging) {
+    // Cursor hint: shift = "you can pan" (grab), otherwise default crosshair.
+    canvas.style.cursor = e.shiftKey ? 'grab' : 'crosshair';
+    return;
+  }
   const rect = canvas.getBoundingClientRect();
   const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
   if (dragging.mode === 'room') {
@@ -1452,6 +1463,14 @@ canvas.addEventListener('mouseup', () => {
   }
   if (fogMode) pushFog();
   dragging = null;
+  canvas.style.cursor = 'crosshair';
+});
+// Shift key acts as a pan affordance hint — update cursor while hovering.
+window.addEventListener('keydown', (e) => {
+  if (e.key === 'Shift' && !dragging) canvas.style.cursor = 'grab';
+});
+window.addEventListener('keyup', (e) => {
+  if (e.key === 'Shift' && !dragging) canvas.style.cursor = 'crosshair';
 });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('wheel', (e) => {
@@ -1468,7 +1487,22 @@ canvas.addEventListener('wheel', (e) => {
 
 $('btnZoomIn').onclick = () => { view.scale *= 1.15; draw(); };
 $('btnZoomOut').onclick = () => { view.scale /= 1.15; draw(); };
-$('btnReset').onclick = () => { view = { scale: 1, ox: 20, oy: 20 }; draw(); };
+$('btnReset').onclick = () => {
+  // Recenter on the active map so a user who accidentally panned
+  // (or held shift and dragged) can un-stick themselves quickly.
+  const m = state.activeMap;
+  const dpr = window.devicePixelRatio || 1;
+  const cssW = canvas.width / dpr;
+  const cssH = canvas.height / dpr;
+  if (m && m.grid_size) {
+    const mapW = m.width * m.grid_size;
+    const mapH = m.height * m.grid_size;
+    view = { scale: 1, ox: Math.max(20, (cssW - mapW) / 2), oy: Math.max(20, (cssH - mapH) / 2) };
+  } else {
+    view = { scale: 1, ox: 20, oy: 20 };
+  }
+  draw();
+};
 
 // ---- Map Library ----
 $('newMap').onclick = () => {
