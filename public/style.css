@@ -339,4 +339,27 @@ body.player .help-section.dm-only { display: none; }
 .token-image-preview img[src=""] {
   display: none;
 }
+.terrain-palette {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0;
+}
+.terrain-swatch {
+  width: 28px;
+  height: 28px;
+  border: 2px solid var(--ink);
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0;
+  font-size: 14px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.terrain-swatch.active {
+  outline: 2px solid var(--accent, #c33);
+  outline-offset: 1px;
+}
   border-radius: 50
