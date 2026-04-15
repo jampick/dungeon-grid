@@ -231,6 +231,74 @@ function renderOwners() {
 const canvas = $('board');
 const ctx = canvas.getContext('2d');
 
+// ---- theme ----
+// Pure helper: decide which theme to apply given a stored choice and system pref.
+// Kept in sync with lib/logic.js#resolveTheme (which is unit tested).
+function resolveTheme(stored, systemPref) {
+  if (stored === 'light' || stored === 'dark') return stored;
+  if (stored == null) {
+    if (systemPref === 'dark' || systemPref === 'light') return systemPref;
+    return 'light';
+  }
+  return 'light';
+}
+
+// Cached CSS var colors used by the canvas renderer. Refreshed on theme change.
+const themeColors = {
+  paper: '#f4ecd8',
+  paperDark: '#e8deb9',
+  ink: '#2a2a2a',
+  inkSoft: '#5b5246',
+  accent: '#7a2e2e',
+  chatBg: '#fbf6e7',
+  doorWood: '#6b3b1a',
+  doorHandle: '#e8c77a',
+  fogPlayer: 'rgba(30,26,20,1)',
+  fogDm: 'rgba(42,42,42,0.55)',
+  lightGlowInner: 'rgba(255, 220, 130, 0.38)',
+  lightGlowOuter: 'rgba(255, 220, 130, 0)',
+  gridLine: 'rgba(42,42,42,0.45)',
+};
+function getCssVar(name, fallback) {
+  const v = getComputedStyle(document.body).getPropertyValue(name).trim();
+  return v || fallback;
+}
+function refreshThemeColors() {
+  themeColors.paper         = getCssVar('--paper',         themeColors.paper);
+  themeColors.paperDark     = getCssVar('--paper-dark',    themeColors.paperDark);
+  themeColors.ink           = getCssVar('--ink',           themeColors.ink);
+  themeColors.inkSoft       = getCssVar('--ink-soft',      themeColors.inkSoft);
+  themeColors.accent        = getCssVar('--accent',        themeColors.accent);
+  themeColors.chatBg        = getCssVar('--chat-bg',       themeColors.chatBg);
+  themeColors.doorWood      = getCssVar('--door-wood',     themeColors.doorWood);
+  themeColors.doorHandle    = getCssVar('--door-handle',   themeColors.doorHandle);
+  themeColors.fogPlayer     = getCssVar('--fog-player',    themeColors.fogPlayer);
+  themeColors.fogDm         = getCssVar('--fog-dm',        themeColors.fogDm);
+  themeColors.lightGlowInner= getCssVar('--light-glow-inner', themeColors.lightGlowInner);
+  themeColors.lightGlowOuter= getCssVar('--light-glow-outer', themeColors.lightGlowOuter);
+  themeColors.gridLine      = getCssVar('--grid-line',     themeColors.gridLine);
+}
+function applyTheme(theme) {
+  document.body.classList.toggle('dark', theme === 'dark');
+  refreshThemeColors();
+  const btn = $('btnTheme');
+  if (btn) {
+    // moon in light mode (click -> go dark), sun in dark mode (click -> go light)
+    btn.textContent = theme === 'dark' ? '\u2600' : '\u263E';
+    btn.title = theme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme';
+  }
+}
+function currentTheme() {
+  return document.body.classList.contains('dark') ? 'dark' : 'light';
+}
+function initTheme() {
+  const stored = localStorage.getItem('dg_theme');
+  const systemPref = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+  applyTheme(resolveTheme(stored, systemPref));
+}
+// Apply before first draw so canvas picks up correct colors.
+initTheme();
+
 function resizeCanvas() {
   const rect = canvas.parentElement.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
@@ -347,7 +415,7 @@ function draw() {
   ctx.scale(view.scale, view.scale);
 
   // paper background
-  ctx.fillStyle = '#f4ecd8';
+  ctx.fillStyle = themeColors.paper;
   ctx.fillRect(0, 0, W, H);
   if (bgImg) {
     ctx.globalAlpha = 0.85;
@@ -356,7 +424,7 @@ function draw() {
   }
 
   // grid
-  ctx.strokeStyle = 'rgba(42,42,42,0.45)';
+  ctx.strokeStyle = themeColors.gridLine;
   ctx.lineWidth = 1;
   if (m.grid_type === 'square') drawSquareGrid(m.width, m.height, size);
   else drawHexGrid(m.width, m.height, size);
@@ -373,8 +441,8 @@ function draw() {
     if (r <= 0) continue;
     const cx = (t.x + 0.5) * size, cy = (t.y + 0.5) * size;
     const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    g.addColorStop(0, 'rgba(255, 220, 130, 0.38)');
-    g.addColorStop(1, 'rgba(255, 220, 130, 0)');
+    g.addColorStop(0, themeColors.lightGlowInner);
+    g.addColorStop(1, themeColors.lightGlowOuter);
     ctx.fillStyle = g;
     ctx.beginPath();
     if (preset.cone) {
@@ -409,7 +477,7 @@ function draw() {
     ctx.save();
     // Offscreen-style layering: render fog into its own compositing group by
     // drawing solid fog, then destination-out carving, all within save/restore.
-    ctx.fillStyle = isDM ? 'rgba(42,42,42,0.55)' : 'rgba(30,26,20,1)';
+    ctx.fillStyle = isDM ? themeColors.fogDm : themeColors.fogPlayer;
     ctx.fillRect(0, 0, W, H);
 
     if (visibleRects.length) {
@@ -475,7 +543,7 @@ function draw() {
     const x2 = side === 'n' ? x + size : x;
     const y2 = side === 'n' ? y : y + size;
     if (info.kind === 'wall') {
-      ctx.strokeStyle = '#2a2a2a';
+      ctx.strokeStyle = themeColors.ink;
       ctx.lineWidth = 4;
       ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
     } else if (info.kind === 'door') {
@@ -483,23 +551,23 @@ function draw() {
       const fx = (x2 - x1), fy = (y2 - y1);
       const aX = x1 + fx * 0.2, aY = y1 + fy * 0.2;
       const bX = x1 + fx * 0.8, bY = y1 + fy * 0.8;
-      ctx.strokeStyle = '#2a2a2a';
+      ctx.strokeStyle = themeColors.ink;
       ctx.lineWidth = 4;
       ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(aX, aY); ctx.stroke();
       ctx.beginPath(); ctx.moveTo(bX, bY); ctx.lineTo(x2, y2); ctx.stroke();
       if (!info.open) {
         // closed door: brown rectangle between a and b
-        ctx.strokeStyle = '#6b3b1a';
+        ctx.strokeStyle = themeColors.doorWood;
         ctx.lineWidth = 5;
         ctx.beginPath(); ctx.moveTo(aX, aY); ctx.lineTo(bX, bY); ctx.stroke();
         // small handle dot
-        ctx.fillStyle = '#e8c77a';
+        ctx.fillStyle = themeColors.doorHandle;
         ctx.beginPath();
         ctx.arc((aX + bX) / 2 + (fy ? 3 : 0), (aY + bY) / 2 + (fx ? 3 : 0), 1.8, 0, Math.PI * 2);
         ctx.fill();
       } else {
         // open door: two short brown ticks perpendicular to the edge at a and b
-        ctx.strokeStyle = '#6b3b1a';
+        ctx.strokeStyle = themeColors.doorWood;
         ctx.lineWidth = 3;
         const nx = -fy / size, ny = fx / size; // unit perpendicular
         const L = size * 0.22;
@@ -513,7 +581,7 @@ function draw() {
         const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
         ctx.fillStyle = 'rgba(122,46,46,0.9)';
         ctx.beginPath(); ctx.arc(mx, my, size * 0.18, 0, Math.PI * 2); ctx.fill();
-        ctx.fillStyle = '#f4ecd8';
+        ctx.fillStyle = themeColors.paper;
         ctx.font = `bold ${Math.floor(size * 0.22)}px Georgia, serif`;
         ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
         ctx.fillText('?', mx, my);
@@ -615,10 +683,10 @@ function drawToken(t, size) {
   ctx.save();
   ctx.beginPath();
   ctx.arc(cx, cy, r, 0, Math.PI * 2);
-  ctx.fillStyle = '#f4ecd8';
+  ctx.fillStyle = themeColors.paper;
   ctx.fill();
   ctx.lineWidth = 2;
-  ctx.strokeStyle = t.color || '#2a2a2a';
+  ctx.strokeStyle = t.color || themeColors.ink;
   ctx.stroke();
 
   // facing tick (small notch pointing outward)
@@ -627,12 +695,12 @@ function drawToken(t, size) {
     ctx.beginPath();
     ctx.moveTo(cx + Math.cos(a) * r * 0.6, cy + Math.sin(a) * r * 0.6);
     ctx.lineTo(cx + Math.cos(a) * r * 1.05, cy + Math.sin(a) * r * 1.05);
-    ctx.strokeStyle = t.color || '#2a2a2a';
+    ctx.strokeStyle = t.color || themeColors.ink;
     ctx.lineWidth = 2;
     ctx.stroke();
   }
 
-  ctx.fillStyle = '#2a2a2a';
+  ctx.fillStyle = themeColors.ink;
   ctx.font = `${Math.floor(size * 0.22)}px Georgia, serif`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
@@ -646,11 +714,11 @@ function drawToken(t, size) {
     const pct = Math.max(0, Math.min(1, t.hp_current / t.hp_max));
     const bw = size * 0.8, bh = 5;
     const bx = cx - bw/2, by = cy + r + 3;
-    ctx.fillStyle = '#e8deb9';
+    ctx.fillStyle = themeColors.paperDark;
     ctx.fillRect(bx, by, bw, bh);
     ctx.fillStyle = pct > 0.5 ? '#2a5a2a' : pct > 0.25 ? '#8a6a1a' : '#7a2e2e';
     ctx.fillRect(bx, by, bw * pct, bh);
-    ctx.strokeStyle = '#2a2a2a';
+    ctx.strokeStyle = themeColors.ink;
     ctx.lineWidth = 1;
     ctx.strokeRect(bx, by, bw, bh);
   }
@@ -823,6 +891,13 @@ function doUndo() {
   socket.emit('dm:undo');
 }
 $('btnUndo').onclick = doUndo;
+
+$('btnTheme').onclick = () => {
+  const next = currentTheme() === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('dg_theme', next);
+  applyTheme(next);
+  if (typeof draw === 'function' && state) draw();
+};
 $('btnUndo').addEventListener('mouseenter', () => {
   const label = state?.undoLabel;
   $('btnUndo').title = label ? `Undo: ${label}` : 'Nothing to undo (Ctrl+Z)';

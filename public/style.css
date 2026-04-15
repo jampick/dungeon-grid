@@ -4,6 +4,36 @@
   --ink: #2a2a2a;
   --ink-soft: #5b5246;
   --accent: #7a2e2e;
+  --chat-bg: #fbf6e7;
+  --door-wood: #6b3b1a;
+  --door-handle: #e8c77a;
+  --fog-player: rgba(30,26,20,1);
+  --fog-dm: rgba(42,42,42,0.55);
+  --light-glow-inner: rgba(255, 220, 130, 0.38);
+  --light-glow-outer: rgba(255, 220, 130, 0);
+  --grid-line: rgba(42,42,42,0.45);
+}
+
+body.dark {
+  --paper: #1c1814;
+  --paper-dark: #28221c;
+  --ink: #d4c49a;
+  --ink-soft: #a69375;
+  --accent: #c77a4a;
+  --chat-bg: #221d17;
+  --door-wood: #8a4e26;
+  --door-handle: #e8c77a;
+  --fog-player: rgba(5,3,2,1);
+  --fog-dm: rgba(5,3,2,0.6);
+  --light-glow-inner: rgba(255, 180, 90, 0.45);
+  --light-glow-outer: rgba(255, 180, 90, 0);
+  --grid-line: rgba(212,196,154,0.35);
+}
+
+body.dark {
+  background-image:
+    radial-gradient(circle at 20% 10%, rgba(255,200,120,.05) 0, transparent 40%),
+    radial-gradient(circle at 80% 80%, rgba(255,150,60,.06) 0, transparent 45%);
 }
 
 * { box-sizing: border-box; }
@@ -146,7 +176,7 @@ main {
 .dice { display: flex; flex-wrap: wrap; gap: 4px; }
 .dice button { flex: 1 0 40px; }
 
-#chat { flex: 1; overflow-y: auto; border: 1px solid var(--ink); padding: 6px; background: #fbf6e7; font-size: 14px; }
+#chat { flex: 1; overflow-y: auto; border: 1px solid var(--ink); padding: 6px; background: var(--chat-bg); font-size: 14px; }
 #chat .msg { margin: 2px 0; }
 #chat .msg .who { font-weight: bold; }
 #chat .msg.dm .who { color: var(--accent); }
