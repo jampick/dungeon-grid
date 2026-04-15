@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread } from '/lib/logic.js?v={{LIB_VERSION}}';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds } from '/lib/logic.js?v={{LIB_VERSION}}';
 import { getCreatures, SIZE_MULTIPLIERS, sizeMultiplier } from '/lib/creatures.js?v={{LIB_VERSION}}';
 import { getObjects } from '/lib/objects.js?v={{LIB_VERSION}}';
 
@@ -291,7 +291,16 @@ function renderMapList() {
 
 function renderTokenList() {
   const list = $('tokenList'); list.innerHTML = '';
+  const isDM = auth && auth.role === 'dm';
+  const seenIds = computeSeenTokenIds({
+    tokens: state.tokens,
+    fogCells,
+    memoryTokens,
+    playerId: me ? me.playerId : null,
+    isDM,
+  });
   for (const t of state.tokens) {
+    if (!isDM && !seenIds.has(t.id)) continue;
     const row = document.createElement('div');
     row.className = 'tk';
     const dot = document.createElement('span');
