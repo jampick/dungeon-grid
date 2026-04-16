@@ -415,6 +415,7 @@ function applyState() {
   $('lightApproval').checked = !!state.campaign.light_approval;
   $('showOtherHp').checked = !!state.campaign.show_other_hp;
   $('ruleset').value = state.campaign.ruleset || '1e';
+  updateJoinPwStatus(!!state.campaign.join_password_hash);
   renderPartyLeaderSelect();
   renderPartyPanel();
   loadFog(state.fog);
@@ -1979,6 +1980,51 @@ $('doorApproval').onchange = () => socket.emit('campaign:settings', { door_appro
 $('lightApproval').onchange = () => socket.emit('campaign:settings', { light_approval: $('lightApproval').checked ? 1 : 0 });
 $('showOtherHp').onchange = () => socket.emit('campaign:settings', { show_other_hp: $('showOtherHp').checked ? 1 : 0 });
 $('ruleset').onchange = () => socket.emit('campaign:settings', { ruleset: $('ruleset').value });
+
+// --- Join Password UI ---
+function updateJoinPwStatus(hasPassword) {
+  const el = $('joinPwStatus');
+  const btn = $('joinPwToggle');
+  if (el) el.textContent = hasPassword ? 'Password required' : 'No password set';
+  if (btn) btn.textContent = hasPassword ? 'Change' : 'Set';
+}
+
+if ($('joinPwToggle')) {
+  $('joinPwToggle').onclick = () => {
+    const form = $('joinPwForm');
+    if (form) form.classList.toggle('hidden');
+  };
+}
+
+if ($('joinPwSave')) {
+  $('joinPwSave').onclick = async () => {
+    const input = $('joinPwInput');
+    const val = input ? input.value : '';
+    const body = { join_password: val || null };
+    try {
+      const res = await fetch(`/api/sessions/${currentSessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${auth.token}` },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) throw new Error('Failed to update join password');
+      const hasPassword = !!val;
+      updateJoinPwStatus(hasPassword);
+      if (input) input.value = '';
+      const form = $('joinPwForm');
+      if (form) form.classList.add('hidden');
+      socket.emit('chat:msg', {
+        text: hasPassword ? 'Join password updated.' : 'Join password removed.',
+        from: 'system',
+        role: 'dm',
+        ts: Date.now(),
+      });
+    } catch (e) {
+      alert(e.message);
+    }
+  };
+}
+
 // Returns true if the current user is the owning player of the campaign's
 // party-leader token (or is the DM — DMs see the party panel too, but this
 // helper is about the leader-exception permission).
