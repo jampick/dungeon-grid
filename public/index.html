@@ -117,7 +117,23 @@
       </label>
       <br/>
       <button id="memoryClear">Clear party memory</button>
+      <br/>
+      <button id="changeDmPwBtn">Change DM Password</button>
     </div>
+
+    <dialog id="dmPwDialog">
+      <form method="dialog">
+        <h3>Change DM Password</h3>
+        <label>Current password<br/><input type="password" id="dmPwOld" autocomplete="current-password" /></label><br/>
+        <label>New password<br/><input type="password" id="dmPwNew" autocomplete="new-password" /></label><br/>
+        <label>Confirm new password<br/><input type="password" id="dmPwConfirm" autocomplete="new-password" /></label><br/>
+        <p id="dmPwError" class="error" style="color:#c00;min-height:1.2em;"></p>
+        <menu>
+          <button id="dmPwCancel" type="button">Cancel</button>
+          <button id="dmPwSave" type="button">Save</button>
+        </menu>
+      </form>
+    </dialog>
 
     <div class="section dm-only">
       <h3>Walls &amp; Doors</h3>
