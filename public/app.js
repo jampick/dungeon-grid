@@ -2533,4 +2533,61 @@ $('dmPwSave').addEventListener('click', async () => {
   }
 });
 
+// ---- Session rename + delete (DM only) ----
+const sessionNameInput = $('sessionName');
+const deleteSessionBtn = $('deleteSession');
+
+// Populate session name input when entering app
+const _origEnterApp = enterApp;
+// We monkey-patch via a listener on the app element becoming visible
+new MutationObserver(() => {
+  if (!appEl.classList.contains('hidden') && sessionNameInput && currentSessionInfo) {
+    sessionNameInput.value = currentSessionInfo.name || '';
+  }
+}).observe(appEl, { attributeFilter: ['class'] });
+
+async function renameSession() {
+  if (!auth || auth.role !== 'dm') return;
+  const newName = (sessionNameInput.value || '').trim();
+  if (!newName || newName === currentSessionInfo?.name) return;
+  try {
+    await api('/api/sessions/' + encodeURIComponent(currentSessionId), {
+      method: 'PATCH',
+      body: JSON.stringify({ name: newName }),
+    });
+    currentSessionInfo.name = newName;
+    const label = $('sessionLabel');
+    if (label) label.textContent = newName;
+    // Update localStorage entry
+    rememberJoinedSession({ id: currentSessionId, name: newName });
+  } catch (e) {
+    alert('Rename failed: ' + e.message);
+    if (currentSessionInfo) sessionNameInput.value = currentSessionInfo.name;
+  }
+}
+
+if (sessionNameInput) {
+  sessionNameInput.addEventListener('blur', renameSession);
+  sessionNameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); renameSession(); }
+  });
+}
+
+if (deleteSessionBtn) {
+  deleteSessionBtn.onclick = async () => {
+    if (!auth || auth.role !== 'dm') return;
+    if (!confirm('Permanently delete this session and all its maps, tokens, and data? This cannot be undone.')) return;
+    try {
+      await api('/api/sessions/' + encodeURIComponent(currentSessionId), { method: 'DELETE' });
+      // Remove from localStorage
+      const joined = getJoinedSessions().filter(s => s.id !== currentSessionId);
+      localStorage.setItem('dg_joined_sessions', JSON.stringify(joined));
+      clearAuthFor(currentSessionId);
+      location.href = '/';
+    } catch (e) {
+      alert('Delete failed: ' + e.message);
+    }
+  };
+}
+
 // ---- boot ---- (handled by router at top of file)
