@@ -6,7 +6,7 @@ Design notes for future work on dungeon-grid. Items here are not committed featu
 
 ### Background
 
-The app currently supports exactly one campaign. Every map, token, wall, fog cell, and player row is implicitly global. Two groups pointed at the same instance would see each other's tokens and overwrite each other's maps. Today the deploy at grid.thesweetmojo.com works around this by being gated behind a single Cloudflare Access email allowlist — only one group uses it.
+The app currently supports exactly one campaign. Every map, token, wall, fog cell, and player row is implicitly global. Two groups pointed at the same instance would see each other's tokens and overwrite each other's maps. Today the deployed instance works around this by being gated behind a single Cloudflare Access email allowlist — only one group uses it.
 
 The goal of this work is session/room isolation so multiple independent groups can share one hosted instance without stepping on each other, each with their own DM, their own players, and their own persistent state.
 
