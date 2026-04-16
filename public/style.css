@@ -249,8 +249,8 @@ dialog button {
   border: 1px solid var(--ink); cursor: pointer;
 }
 dialog button:hover { background: var(--paper-dark); }
-dialog button.danger { color: var(--accent); }
-body.dark dialog button.danger { color: #ff8a5c; border-color: #ff8a5c; }
+dialog button.danger, button.danger { color: var(--accent); border-color: var(--accent); }
+body.dark dialog button.danger, body.dark button.danger { color: #ff8a5c; border-color: #ff8a5c; }
 
 /* Ensure <option> elements are readable in dark mode across browsers */
 option { background: var(--paper); color: var(--ink); }
