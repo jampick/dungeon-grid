@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, cacheBustedImageUrl, lightClipRadiusPx, hasLineOfSight, findCopyOffset, shouldStartPan, isTokenSelected, TERRAIN_COLORS, TERRAIN_KINDS, pickTerrainColor, parseSessionFromPath, authStorageKey, addJoinedSession } from '/lib/logic.js?v={{LIB_VERSION}}';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, cacheBustedImageUrl, lightClipRadiusPx, hasLineOfSight, findCopyOffset, shouldStartPan, isTokenSelected, TERRAIN_COLORS, TERRAIN_KINDS, pickTerrainColor, parseSessionFromPath, authStorageKey, addJoinedSession, validatePasswordChange } from '/lib/logic.js?v={{LIB_VERSION}}';
 import { getCreatures, SIZE_MULTIPLIERS, sizeMultiplier } from '/lib/creatures.js?v={{LIB_VERSION}}';
 import { getObjects } from '/lib/objects.js?v={{LIB_VERSION}}';
 import { getSpells } from '/lib/spells.js?v={{LIB_VERSION}}';
@@ -2493,6 +2493,44 @@ document.addEventListener('keydown', (e) => {
   selectedTokenId = null;
   draw();
   renderTokenList();
+});
+
+// ---- DM password change dialog ----
+$('changeDmPwBtn').addEventListener('click', () => {
+  $('dmPwOld').value = '';
+  $('dmPwNew').value = '';
+  $('dmPwConfirm').value = '';
+  $('dmPwError').textContent = '';
+  $('dmPwDialog').showModal();
+});
+$('dmPwCancel').addEventListener('click', () => {
+  $('dmPwDialog').close();
+});
+$('dmPwSave').addEventListener('click', async () => {
+  const oldPw = $('dmPwOld').value;
+  const newPw = $('dmPwNew').value;
+  const confirmPw = $('dmPwConfirm').value;
+  const err = validatePasswordChange(oldPw, newPw, confirmPw);
+  if (err) { $('dmPwError').textContent = err; return; }
+  try {
+    const res = await fetch('/api/instance/dm-password', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ old: oldPw, new: newPw }),
+    });
+    if (res.ok) {
+      $('dmPwDialog').close();
+      onChat({ from: 'System', text: 'DM password changed successfully.', role: 'system' });
+    } else if (res.status === 401) {
+      $('dmPwError').textContent = 'Wrong current password';
+    } else if (res.status === 429) {
+      $('dmPwError').textContent = 'Too many attempts — try again later';
+    } else {
+      $('dmPwError').textContent = 'Unexpected error';
+    }
+  } catch (e) {
+    $('dmPwError').textContent = 'Network error';
+  }
 });
 
 // ---- boot ---- (handled by router at top of file)
