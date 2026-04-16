@@ -97,7 +97,7 @@ if ($('btnDM')) $('btnDM').onclick = async () => {
     const body = {
       session_id: currentSessionId,
       name: $('name').value || 'DM',
-      dm_password: $('dmpass').value,
+      password: $('dmpass').value,
     };
     const r = await api('/api/login/dm', { method: 'POST', body: JSON.stringify(body) });
     auth = r;
