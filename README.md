@@ -211,8 +211,6 @@ Iterate on the PC, push to `main`, the NAS picks it up. Two paths:
 
 **Critical constraint:** `/var/run/docker.sock` is deliberately not mounted into the container. A container RCE must not become NAS root. The trigger-file + host-runner pattern exists specifically to avoid exposing the socket. The updater runs on the host under DSM Task Scheduler.
 
-<!-- maintainer note: production deploy is live at grid.thesweetmojo.com -->
-
 ## Configuration
 
 Environment variables:
