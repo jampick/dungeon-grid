@@ -218,6 +218,7 @@ app.get('/api/sessions', (req, res) => {
     name: r.name,
     has_join_password: !!r.join_password_hash,
     last_active_at: r.last_active_at,
+    active_players: io.sockets.adapter.rooms.get('session:' + r.id)?.size || 0,
   })));
 });
 
