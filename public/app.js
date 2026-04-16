@@ -2,7 +2,7 @@
 // Loaded as an ES module (<script type="module">) so we can import the same
 // pure-logic helpers the server uses. Keeps one source of truth for wall
 // collision and light/fog BFS across both sides.
-import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, cacheBustedImageUrl, lightClipRadiusPx, hasLineOfSight, findCopyOffset, shouldStartPan, isTokenSelected, TERRAIN_COLORS, TERRAIN_KINDS, pickTerrainColor, parseSessionFromPath, authStorageKey, addJoinedSession, validatePasswordChange } from '/lib/logic.js?v={{LIB_VERSION}}';
+import { LIGHT_PRESETS, computeRevealed, walkUntilBlocked, walkWithRange, getRaces, defaultMoveForRace, stackOffsets, effectiveLightRadius, pickByKindPriority, shouldMarkUnread, computeSeenTokenIds, formatLegendText, cacheBustedImageUrl, lightClipRadiusPx, hasLineOfSight, findCopyOffset, shouldStartPan, isTokenSelected, TERRAIN_COLORS, TERRAIN_KINDS, pickTerrainColor, parseSessionFromPath, authStorageKey, addJoinedSession, validatePasswordChange, relativeTime } from '/lib/logic.js?v={{LIB_VERSION}}';
 import { getCreatures, SIZE_MULTIPLIERS, sizeMultiplier } from '/lib/creatures.js?v={{LIB_VERSION}}';
 import { getObjects } from '/lib/objects.js?v={{LIB_VERSION}}';
 import { getSpells } from '/lib/spells.js?v={{LIB_VERSION}}';
@@ -169,19 +169,6 @@ function renderSessionSwitcher() {
 }
 
 // --- Landing page ---
-function relativeTime(ts) {
-  if (!ts) return '';
-  const diff = Date.now() - Number(ts);
-  if (!isFinite(diff) || diff < 0) return '';
-  const s = Math.floor(diff / 1000);
-  if (s < 60) return s + ' sec ago';
-  const m = Math.floor(s / 60);
-  if (m < 60) return m + ' min ago';
-  const h = Math.floor(m / 60);
-  if (h < 24) return h + ' hour' + (h === 1 ? '' : 's') + ' ago';
-  const d = Math.floor(h / 24);
-  return d + ' day' + (d === 1 ? '' : 's') + ' ago';
-}
 
 async function showLanding() {
   hideAllShells();
@@ -200,14 +187,18 @@ async function showLanding() {
   if (listEl) {
     listEl.innerHTML = '';
     if (!sessions.length) {
-      listEl.innerHTML = '<p class="sub">no sessions yet — create one below</p>';
+      listEl.innerHTML = '<p class="sub">No sessions yet — create one below!</p>';
     } else {
       for (const s of sessions) {
         const row = document.createElement('div');
         row.className = 'session-row';
+        const activeBadge = s.active_players > 0
+          ? '<span class="session-active" style="color:#4a4">\u25CF ' + s.active_players + ' playing</span>'
+          : '<span class="session-active" style="opacity:0.4">idle</span>';
         row.innerHTML =
           '<span class="session-name"></span>' +
           '<span class="session-meta"></span>' +
+          activeBadge +
           (s.has_join_password ? '<span class="session-lock" title="password required">\u{1F512}</span>' : '');
         row.querySelector('.session-name').textContent = s.name;
         row.querySelector('.session-meta').textContent = relativeTime(s.last_active_at);
