@@ -119,6 +119,15 @@
       <button id="memoryClear">Clear party memory</button>
       <br/>
       <button id="changeDmPwBtn">Change DM Password</button>
+      <hr/>
+      <div id="joinPwSection">
+        <span id="joinPwStatus">No password set</span>
+        <button id="joinPwToggle" type="button">Set</button>
+        <div id="joinPwForm" class="hidden">
+          <input type="password" id="joinPwInput" placeholder="New join password (blank to remove)" />
+          <button id="joinPwSave" type="button">Save</button>
+        </div>
+      </div>
     </div>
 
     <dialog id="dmPwDialog">
